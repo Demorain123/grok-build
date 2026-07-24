@@ -168,14 +168,20 @@ jobs:
         shell: pwsh
         run: cargo check -p xai-file-utils --quiet
 
-      - name: Compile xai-grok-memory hardening (diagnostic; upstream baseline currently fails on Windows)
+      - name: Compile xai-grok-memory hardening (diagnostic)
         continue-on-error: true
         shell: pwsh
         run: cargo check -p xai-grok-memory --quiet
 
-      - name: Compile xai-grok-telemetry hardening
+      - name: Compile xai-grok-telemetry hardening (diagnostic; production path is checked by shell/release)
+        continue-on-error: true
         shell: pwsh
-        run: cargo check -p xai-grok-telemetry --quiet
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'telemetry-check.log'
+          cargo check -p xai-grok-telemetry --message-format short *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log -Tail 80
+          exit $code
 
       - name: Compile xai-grok-shell hardening
         shell: pwsh
