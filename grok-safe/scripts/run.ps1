@@ -64,16 +64,16 @@ $env:GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS = '0'
 $env:GROK_STORAGE_MODE = 'local'
 $env:GROK_CODE_BACKEND_URL = 'http://127.0.0.1:9/grok-safe-remote-sync-blocked'
 
-# Disable product telemetry, trace uploads, feedback analytics, and both
-# internal/external OTLP. Normal inference, tools, MCP, hooks and plugins are
-# intentionally not disabled here.
+# Disable Grok-owned product telemetry, trace uploads, feedback analytics, and
+# Grok's external OTLP configuration. The Rust patch independently disables both
+# internal and external OTLP exporters. We intentionally do NOT mutate generic
+# OTEL_* environment variables because explicit MCP/hooks/shell child processes
+# may legitimately depend on the user's OpenTelemetry environment.
 $env:GROK_TELEMETRY_ENABLED = 'false'
 $env:GROK_TELEMETRY_TRACE_UPLOAD = 'false'
 $env:GROK_TELEMETRY_MIXPANEL_ENABLED = 'false'
 $env:GROK_FEEDBACK_ENABLED = 'false'
 $env:GROK_EXTERNAL_OTEL = '0'
-$env:OTEL_TRACES_EXPORTER = 'none'
-$env:OTEL_SDK_DISABLED = 'true'
 
 # Preserve normal Grok extension behavior by default. This includes native MCP
 # and upstream Claude/Cursor compatibility discovery. Users who explicitly want
@@ -98,19 +98,10 @@ if ($StrictExtensionIsolation -and -not $AllowVendorCompatibility) {
     }
 }
 
-# Remove inherited destinations/credentials/content gates for known Grok-owned
-# auxiliary telemetry/storage paths. Do not clear HTTP(S)_PROXY because the
-# inference/auth path and explicit MCP/tools may legitimately require it.
+# Remove inherited destinations/credentials for known Grok-owned auxiliary
+# paths only. Do not clear HTTP(S)_PROXY or generic OTEL_* variables: inference,
+# auth and explicitly configured MCP/tools may legitimately use them.
 foreach ($name in @(
-    'OTEL_EXPORTER_OTLP_ENDPOINT',
-    'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
-    'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT',
-    'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
-    'OTEL_EXPORTER_OTLP_HEADERS',
-    'OTEL_EXPORTER_OTLP_LOGS_HEADERS',
-    'OTEL_EXPORTER_OTLP_METRICS_HEADERS',
-    'OTEL_LOG_USER_PROMPTS',
-    'OTEL_LOG_TOOL_DETAILS',
     'GROK_INTERNAL_OTLP_TRACES_ENDPOINT',
     'GROK_INTERNAL_OTLP_HEADERS',
     'GROK_TRACE_UPLOAD_URL',
@@ -171,7 +162,7 @@ Write-Host "Binary integrity: VERIFIED ($actualHash)" -ForegroundColor Green
 Write-Host 'Cloud/session artifact uploads: BLOCKED'
 Write-Host 'Remote session writeback/share backend: BLOCKED'
 Write-Host 'In-app self-update: BLOCKED (sync + rebuild instead)'
-Write-Host 'Product telemetry / internal+external OTLP / feedback analytics: BLOCKED'
+Write-Host 'Product telemetry / Grok OTLP / feedback analytics: BLOCKED'
 Write-Host 'Native MCP/hooks/plugins: UPSTREAM BEHAVIOR RETAINED'
 Write-Host ("Vendor compatibility discovery: {0}" -f $(if ($StrictExtensionIsolation -and -not $AllowVendorCompatibility) { 'BLOCKED FOR THIS STRICT RUN' } else { 'UPSTREAM BEHAVIOR RETAINED' }))
 Write-Host "GROK_HOME: $effectiveHome"
