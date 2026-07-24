@@ -196,7 +196,12 @@ jobs:
 
       - name: Compile xai-grok-shell hardening
         shell: pwsh
-        run: cargo check -p xai-grok-shell --quiet
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'shell-check.log'
+          cargo check -p xai-grok-shell --message-format short *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log -Tail 120
+          exit $code
 
       - name: Compile xai-grok-update hardening
         shell: pwsh
