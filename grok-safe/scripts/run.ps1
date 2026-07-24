@@ -123,12 +123,14 @@ if ($hasPluginDir -and -not $AllowProjectExtensions) {
 }
 
 Write-Host 'Running project extension preflight...'
+# PowerShell-script failures propagate via throw because ErrorActionPreference=Stop.
+# Do not inspect $LASTEXITCODE here: preflight may intentionally probe a native
+# command (for example `git rev-parse` outside a repo) and handle that failure.
 if ($AllowProjectExtensions) {
     & $Preflight -ProjectPath (Get-Location).Path -AllowProjectExtensions
 } else {
     & $Preflight -ProjectPath (Get-Location).Path
 }
-if ($LASTEXITCODE -ne 0) { throw 'grok-safe project preflight failed' }
 
 $effectiveHome = if ($env:GROK_HOME) { $env:GROK_HOME } else { Join-Path $HOME '.grok' }
 
