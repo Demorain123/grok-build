@@ -19,11 +19,13 @@ diff --git a/crates/codegen/xai-grok-memory/src/embedding.rs b/crates/codegen/xa
  /// Trait for generating text embeddings.
  ///
  /// Implementations must be `Send + Sync` so they can be used in `Send`
-@@ -69,6 +80,10 @@ impl ApiEmbeddingProvider {
+@@ -69,6 +80,12 @@ impl ApiEmbeddingProvider {
      /// Returns `None` if no model is configured, which signals the caller
      /// to use FTS-only mode.
      pub fn from_config(config: &MemoryEmbeddingConfig, http_client: Client) -> Option<Self> {
 +        if !grok_safe_aux_egress_allowed() {
++            // grok-safe: blocked remote memory embedding text egress by declining
++            // provider construction; callers naturally keep FTS-only memory search.
 +            return None;
 +        }
 +
