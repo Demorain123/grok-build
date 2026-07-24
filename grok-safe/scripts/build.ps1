@@ -16,6 +16,7 @@ $CacheDir = Join-Path $SafeRoot '.cache'
 $TargetDir = Join-Path $CacheDir 'target'
 $oldProtoc = $env:PROTOC
 $oldSafeProtocVersion = $env:GROK_SAFE_PROTOC_VERSION
+$oldAwsLcPrebuiltNasm = $env:AWS_LC_SYS_PREBUILT_NASM
 
 # On Windows, ensure-windows-protoc.ps1 sets PROTOC to a verified native
 # protoc adapter before Cargo runs. Upstream xai-proto-build checks PROTOC
@@ -69,6 +70,13 @@ try {
         if (-not $env:PROTOC) { throw 'Windows protoc bootstrap did not set PROTOC.' }
         $protocVersion = (& $env:PROTOC --version 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0) { throw 'Prepared Windows protoc failed its version check.' }
+
+        # aws-lc-sys requires NASM for native x86/x86-64 assembly builds. For
+        # non-FIPS Windows x86-64 builds it officially supports crate-provided
+        # prebuilt NASM objects when NASM is absent. Allow that fallback so a
+        # clean Windows machine does not need a separate NASM installation.
+        $env:AWS_LC_SYS_PREBUILT_NASM = '1'
+        Write-Host 'AWS-LC Windows NASM fallback: crate-provided prebuilt NASM objects are allowed.'
     }
 
     $patchHashes = [ordered]@{}
@@ -246,6 +254,11 @@ finally {
         Remove-Item Env:GROK_SAFE_PROTOC_VERSION -ErrorAction SilentlyContinue
     } else {
         $env:GROK_SAFE_PROTOC_VERSION = $oldSafeProtocVersion
+    }
+    if ($null -eq $oldAwsLcPrebuiltNasm) {
+        Remove-Item Env:AWS_LC_SYS_PREBUILT_NASM -ErrorAction SilentlyContinue
+    } else {
+        $env:AWS_LC_SYS_PREBUILT_NASM = $oldAwsLcPrebuiltNasm
     }
     Pop-Location
 }
