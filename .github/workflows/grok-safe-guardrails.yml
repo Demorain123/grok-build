@@ -95,10 +95,6 @@ jobs:
         shell: pwsh
         run: git apply --recount --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
 
-      - name: Strict patch header check
-        shell: pwsh
-        run: git apply --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Run grok-safe static audit
         shell: pwsh
         run: .\grok-safe\scripts\audit.ps1
@@ -135,8 +131,8 @@ jobs:
       - name: Apply hardening patch
         shell: pwsh
         run: |
-          git apply --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-          git apply -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+          git apply --recount --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+          git apply --recount -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
           git diff --check
 
       - name: Compile every patched crate
