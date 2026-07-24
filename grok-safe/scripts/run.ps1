@@ -13,20 +13,43 @@ Set-StrictMode -Version Latest
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SafeRoot = Resolve-Path (Join-Path $ScriptDir '..')
 $Binary = Join-Path $SafeRoot 'dist\grok-safe.exe'
+$HashFile = Join-Path $SafeRoot 'dist\grok-safe.exe.sha256'
+$BuildInfoFile = Join-Path $SafeRoot 'dist\BUILD_INFO.json'
 $Preflight = Join-Path $ScriptDir 'preflight.ps1'
 
-if (-not (Test-Path $Binary)) {
+if (-not (Test-Path $Binary -PathType Leaf)) {
     throw "grok-safe.exe was not found. Build it first with: .\grok-safe\scripts\build.ps1"
 }
-if (-not (Test-Path $Preflight)) {
+if (-not (Test-Path $HashFile -PathType Leaf)) {
+    throw "grok-safe integrity manifest was not found: $HashFile. Rebuild with build.ps1 instead of running an untracked binary."
+}
+if (-not (Test-Path $BuildInfoFile -PathType Leaf)) {
+    throw "grok-safe BUILD_INFO.json was not found: $BuildInfoFile. Rebuild with build.ps1."
+}
+if (-not (Test-Path $Preflight -PathType Leaf)) {
     throw "grok-safe preflight script was not found: $Preflight"
+}
+
+# Fail closed on accidental/stale binary replacement. This is an integrity
+# consistency check, not a signature against an attacker who can rewrite both
+# the binary and its local manifests.
+$hashManifest = (Get-Content -Raw -LiteralPath $HashFile).Trim()
+$expectedHash = ($hashManifest -split '\s+')[0].ToLowerInvariant()
+if ($expectedHash -notmatch '^[0-9a-f]{64}$') {
+    throw "Invalid grok-safe SHA256 manifest: $HashFile"
+}
+$actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Binary).Hash.ToLowerInvariant()
+if ($actualHash -ne $expectedHash) {
+    throw "grok-safe.exe SHA256 mismatch. Expected $expectedHash but found $actualHash. Refusing to launch; rebuild from the reviewed safety branch."
+}
+$buildInfo = Get-Content -Raw -LiteralPath $BuildInfoFile | ConvertFrom-Json
+if (-not $buildInfo.binary_sha256 -or $buildInfo.binary_sha256.ToString().ToLowerInvariant() -ne $actualHash) {
+    throw 'BUILD_INFO.json binary_sha256 does not match grok-safe.exe. Refusing to launch.'
 }
 
 # ---------------------------------------------------------------------------
 # Fail-closed local policy. These are intentionally set (not merely cleared)
 # so an unsafe value inherited from the parent shell cannot weaken grok-safe.
-# The Rust patch independently enforces these unsafe escape hatches when the
-# binary is launched directly without this wrapper.
 # ---------------------------------------------------------------------------
 $env:GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS = '0'
 $env:GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC = '0'
@@ -123,9 +146,6 @@ if ($hasPluginDir -and -not $AllowProjectExtensions) {
 }
 
 Write-Host 'Running project extension preflight...'
-# PowerShell-script failures propagate via throw because ErrorActionPreference=Stop.
-# Do not inspect $LASTEXITCODE here: preflight may intentionally probe a native
-# command (for example `git rev-parse` outside a repo) and handle that failure.
 if ($AllowProjectExtensions) {
     & $Preflight -ProjectPath (Get-Location).Path -AllowProjectExtensions
 } else {
@@ -136,6 +156,7 @@ $effectiveHome = if ($env:GROK_HOME) { $env:GROK_HOME } else { Join-Path $HOME '
 
 Write-Host ''
 Write-Host 'grok-safe privacy guard: ON' -ForegroundColor Green
+Write-Host "Binary integrity: VERIFIED ($actualHash)" -ForegroundColor Green
 Write-Host 'Cloud/session artifact uploads: BLOCKED'
 Write-Host 'Remote session writeback/share backend: BLOCKED'
 Write-Host 'In-app self-update: BLOCKED (sync + rebuild instead)'
