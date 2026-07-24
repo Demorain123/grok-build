@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$UseOfficialHome,
+    [switch]$IsolatedHome,
     [switch]$StrictExtensionIsolation,
     [switch]$AllowProjectExtensions,
     [switch]$AllowVendorCompatibility,
@@ -18,6 +19,9 @@ $HashFile = Join-Path $SafeRoot 'dist\grok-safe.exe.sha256'
 $BuildInfoFile = Join-Path $SafeRoot 'dist\BUILD_INFO.json'
 $Preflight = Join-Path $ScriptDir 'preflight.ps1'
 
+if ($UseOfficialHome -and $IsolatedHome) {
+    throw 'Choose either -UseOfficialHome or -IsolatedHome, not both.'
+}
 if (-not (Test-Path $Binary -PathType Leaf)) {
     throw "grok-safe.exe was not found. Build it first with: .\grok-safe\scripts\build.ps1"
 }
@@ -48,10 +52,8 @@ if (-not $buildInfo.binary_sha256 -or $buildInfo.binary_sha256.ToString().ToLowe
     throw 'BUILD_INFO.json binary_sha256 does not match grok-safe.exe. Refusing to launch.'
 }
 
-# ---------------------------------------------------------------------------
 # Fail-closed local policy for Grok-owned non-inference egress. These are set
 # explicitly so inherited environment values cannot weaken the reviewed wrapper.
-# ---------------------------------------------------------------------------
 $env:GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS = '0'
 $env:GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC = '0'
 $env:GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE = '0'
@@ -126,16 +128,19 @@ foreach ($name in @(
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
 
-# Isolate the Grok user home by default for first-run/testing. Project-scoped
-# MCP/config still works. Use -UseOfficialHome when you intentionally want your
-# existing ~/.grok user MCPs, plugins, credentials and settings unchanged.
-if (-not $UseOfficialHome) {
+# Normal mode deliberately keeps the same user home as official Grok so user
+# MCPs, model config, credentials, plugins and preferences continue to work.
+# -IsolatedHome is an opt-in mode for testing/sensitive repos. -UseOfficialHome
+# remains accepted as an explicit/documenting no-op for older instructions.
+if ($IsolatedHome) {
     if ($env:GROK_SAFE_HOME) {
         $env:GROK_HOME = $env:GROK_SAFE_HOME
     } else {
         $env:GROK_HOME = Join-Path $HOME '.grok-safe'
     }
     New-Item -ItemType Directory -Force -Path $env:GROK_HOME | Out-Null
+} else {
+    $env:GROK_HOME = Join-Path $HOME '.grok'
 }
 
 # Allow callers to use the common `--` separator without forwarding it to Grok.
@@ -154,11 +159,11 @@ Write-Host 'Running project extension preflight...'
 $preflightArgs = @{
     ProjectPath = (Get-Location).Path
 }
-if ($StrictExtensionIsolation) { $preflightArgs.StrictExtensionIsolation = $true }
-if ($AllowProjectExtensions) { $preflightArgs.AllowProjectExtensions = $true }
+if ($StrictExtensionIsolation) { $preflightArgs['StrictExtensionIsolation'] = $true }
+if ($AllowProjectExtensions) { $preflightArgs['AllowProjectExtensions'] = $true }
 & $Preflight @preflightArgs
 
-$effectiveHome = if ($env:GROK_HOME) { $env:GROK_HOME } else { Join-Path $HOME '.grok' }
+$effectiveHome = $env:GROK_HOME
 
 Write-Host ''
 Write-Host 'grok-safe privacy guard: ON' -ForegroundColor Green
