@@ -7,7 +7,7 @@ Set-StrictMode -Version Latest
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SafeRoot = Resolve-Path (Join-Path $ScriptDir '..')
 $RepoRoot = Resolve-Path (Join-Path $SafeRoot '..')
-$PatchPath = Join-Path $SafeRoot 'patches\0001-disable-cloud-storage-uploads.patch'
+$PatchDir = Join-Path $SafeRoot 'patches'
 $RunScript = Join-Path $ScriptDir 'run.ps1'
 $PreflightScript = Join-Path $ScriptDir 'preflight.ps1'
 $WorkflowPath = Join-Path $RepoRoot '.github\workflows\grok-safe-guardrails.yml'
@@ -25,14 +25,21 @@ try {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         Fail 'git is not available on PATH'
     }
-    foreach ($path in @($PatchPath, $RunScript, $PreflightScript, $WorkflowPath)) {
+    foreach ($path in @($RunScript, $PreflightScript, $WorkflowPath)) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing required safety file: $path" }
     }
+
+    $PatchFiles = @(
+        Get-ChildItem -LiteralPath $PatchDir -File -Filter '*.patch' -ErrorAction Stop |
+            Sort-Object Name
+    )
+    if ($PatchFiles.Count -eq 0) { Fail "no hardening patches found under: $PatchDir" }
+    $PatchPaths = @($PatchFiles | ForEach-Object { $_.FullName })
+    $patchText = (($PatchFiles | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n")
 
     & git rev-parse --is-inside-work-tree *> $null
     if ($LASTEXITCODE -ne 0) { Fail 'repository root could not be verified' }
 
-    $patchText = Get-Content -Raw -LiteralPath $PatchPath
     $runText = Get-Content -Raw -LiteralPath $RunScript
     $preflightText = Get-Content -Raw -LiteralPath $PreflightScript
     $workflowText = Get-Content -Raw -LiteralPath $WorkflowPath
@@ -44,14 +51,13 @@ try {
     )
     if ($rustPaths.Count -eq 0) { Fail 'no Rust source files found under crates/' }
 
-    Write-Host '[1/10] Checking hardening patch contexts apply cleanly...'
-    # The patch is intentionally hand-maintained as a tiny replay layer. --recount
-    # derives hunk lengths from the actual +/-/context lines while still requiring
-    # those contexts to match the upstream source. This avoids bookkeeping-only
-    # failures without masking real upstream code drift.
-    & git apply --recount --check -- $PatchPath
-    if ($LASTEXITCODE -ne 0) {
-        Fail 'hardening patch contexts no longer apply cleanly; upstream security-sensitive code changed and needs review'
+    Write-Host '[1/10] Checking ordered hardening patch contexts apply cleanly...'
+    foreach ($patch in $PatchFiles) {
+        Write-Host ("  checking {0}" -f $patch.Name)
+        & git apply --recount --check -- $patch.FullName
+        if ($LASTEXITCODE -ne 0) {
+            Fail "hardening patch no longer applies cleanly: $($patch.Name); upstream security-sensitive code changed and needs review"
+        }
     }
 
     Write-Host '[2/10] Checking shared cloud-upload API surface...'
@@ -61,9 +67,6 @@ try {
     $gcsMatches = [regex]::Matches($gcsText, 'pub\s+async\s+fn\s+(upload_[A-Za-z0-9_]+)')
     $actualGcs = @($gcsMatches | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
 
-    # Four top-level dispatchers must fail before backend selection. Upstream also
-    # exposes upload_bytes_via_signed_url directly; that helper is intentionally
-    # covered by the patched StorageClient::with_provider loopback defense.
     $guardedDispatchers = @('upload_bytes', 'upload_bytes_signed', 'upload_file', 'upload_stream')
     $storageClientCoveredHelpers = @('upload_bytes_via_signed_url')
     $knownPublicUploadHelpers = @($guardedDispatchers + $storageClientCoveredHelpers | Sort-Object -Unique)
@@ -78,13 +81,11 @@ try {
         }
     }
     foreach ($name in $guardedDispatchers) {
-        Require-Contains $patchText ('grok_safe_block_cloud_storage_upload("' + $name + '")') "patch has no fail-closed guard for $name"
+        Require-Contains $patchText ('grok_safe_block_cloud_storage_upload("' + $name + '")') "patch set has no fail-closed guard for $name"
     }
     Require-Contains $patchText 'grok-safe-storage-blocked' 'StorageClient loopback defense required by signed-url helper is missing'
 
     Write-Host '[3/10] Checking storage/backend bypasses and cloud SDK placement...'
-    # IMPORTANT: use -Path explicitly. Piping FileInfo objects to Select-String can
-    # search their string representation instead of the file contents.
     $directS3 = @(
         Select-String -Path $rustPaths -Pattern '(^|[^A-Za-z0-9_])(crate::s3::upload_|xai_file_utils::s3::upload_)' |
             Where-Object { $_.Path -notlike '*\xai-file-utils\src\gcs.rs' }
@@ -139,27 +140,32 @@ try {
         Require-Contains $patchText $marker "remote-sync hardening marker missing: $marker"
     }
 
-    Write-Host '[5/10] Verifying product telemetry, OTLP and feedback are fail-closed in the binary...'
+    Write-Host '[5/10] Verifying telemetry, feedback and session-analytics egress is fail-closed...'
     $telemetryClientPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-telemetry\src\client.rs'
     $externalOtelPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-telemetry\src\external\mod.rs'
     $internalOtelPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-telemetry\src\otel_layer\mod.rs'
-    $feedbackPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\extensions\feedback.rs'
-    foreach ($path in @($telemetryClientPath, $externalOtelPath, $internalOtelPath, $feedbackPath)) {
+    $feedbackExtensionPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\extensions\feedback.rs'
+    $feedbackClientPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\agent\feedback_client.rs'
+    foreach ($path in @($telemetryClientPath, $externalOtelPath, $internalOtelPath, $feedbackExtensionPath, $feedbackClientPath)) {
         if (-not (Test-Path $path)) { Fail "missing expected auxiliary-egress source: $path" }
     }
     $telemetryClientText = Get-Content -Raw -LiteralPath $telemetryClientPath
     $externalOtelText = Get-Content -Raw -LiteralPath $externalOtelPath
     $internalOtelText = Get-Content -Raw -LiteralPath $internalOtelPath
-    $feedbackText = Get-Content -Raw -LiteralPath $feedbackPath
+    $feedbackExtensionText = Get-Content -Raw -LiteralPath $feedbackExtensionPath
+    $feedbackClientText = Get-Content -Raw -LiteralPath $feedbackClientPath
     Require-Contains $telemetryClientText 'pub fn init(' 'telemetry client init moved/changed; review product telemetry sink'
     Require-Contains $telemetryClientText 'pub fn init_if_needed(' 'telemetry re-init moved/changed; review product telemetry sink'
     Require-Contains $externalOtelText 'pub fn init(cfg: Option<ExternalOtelConfig>)' 'external OTLP init moved/changed; review external exporter sink'
     Require-Contains $internalOtelText 'fn build_tracer_provider(' 'internal OTLP provider construction moved/changed; review internal exporter sink'
-    Require-Contains $feedbackText 'async fn handle_feedback(' 'feedback handler moved/changed; review feedback egress sink'
-    if ([regex]::Matches($patchText, [regex]::Escape('GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS')).Count -lt 4) {
+    Require-Contains $feedbackExtensionText 'async fn handle_feedback(' 'feedback extension moved/changed; review feedback egress sink'
+    Require-Contains $feedbackClientText 'async fn send_json<T: DeserializeOwned>' 'FeedbackClient JSON send sink moved/changed; review session analytics egress'
+    Require-Contains $feedbackClientText 'async fn send_empty' 'FeedbackClient empty send sink moved/changed; review session analytics egress'
+    Require-Contains $feedbackClientText 'send_turn_delta' 'per-turn analytics path moved/changed; review session analytics egress'
+    if ([regex]::Matches($patchText, [regex]::Escape('GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS')).Count -lt 5) {
         Fail 'auxiliary-egress binary guard is not present across all expected telemetry/feedback layers'
     }
-    foreach ($marker in @('feedback network submission is disabled','grok_safe_aux_egress_allowed')) {
+    foreach ($marker in @('feedback network submission is disabled','blocked feedback/session-signals auxiliary request','grok_safe_aux_egress_allowed')) {
         Require-Contains $patchText $marker "auxiliary-egress hardening marker missing: $marker"
     }
 
@@ -219,7 +225,7 @@ try {
     Write-Host '[9/10] Verifying CI guardrails compile the patched security boundary...'
     foreach ($needle in @(
         '.\grok-safe\scripts\audit.ps1',
-        'git apply --recount --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch',
+        '0002-block-feedback-session-signals.patch',
         'cargo check -p xai-file-utils',
         'cargo check -p xai-grok-telemetry',
         'cargo check -p xai-grok-shell',
@@ -232,7 +238,7 @@ try {
     Write-Host '[10/10] Inventorying security-sensitive network/storage markers...'
     $riskPatterns = @(
         '/storage','storage.googleapis.com','https://code.grok.com','save_session_data',
-        'repo_state.upload','upload_multipart','batch_upload','TraceExportConfig',
+        'turn-deltas','/signals','repo_state.upload','upload_multipart','batch_upload','TraceExportConfig',
         'aws_sdk_s3','gcloud_storage','reqwest::multipart',
         'GROK_INTERNAL_OTLP_TRACES_ENDPOINT','GROK_TRACE_UPLOAD_BUCKET',
         'GROK_TELEMETRY_ENABLED','GROK_FEEDBACK_ENABLED','run_install_script'
@@ -246,12 +252,12 @@ try {
         'GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC','grok-safe-remote-sync-blocked',
         'GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS','GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE'
     )) {
-        Require-Contains $patchText $marker "hardening marker missing from patch: $marker"
+        Require-Contains $patchText $marker "hardening marker missing from patch set: $marker"
     }
 
     Write-Host ''
     Write-Host 'grok-safe static audit PASSED.' -ForegroundColor Green
-    Write-Host 'Known non-inference storage/session-sync/telemetry/update sinks are fail-closed and upgrade drift is checked.'
+    Write-Host 'Known non-inference storage/session-sync/telemetry/session-analytics/update sinks are fail-closed and upgrade drift is checked.'
     Write-Host 'This does NOT prove that model inference contains no source code, nor does it sandbox explicitly trusted MCP/hooks/plugins/shell/web tools.' -ForegroundColor Yellow
 }
 finally {
