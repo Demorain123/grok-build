@@ -119,10 +119,10 @@ foreach ($name in @(
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
 
-# Normal mode deliberately keeps the same user home as official Grok so user
-# MCPs, model config, credentials, plugins and preferences continue to work.
-# -IsolatedHome is an opt-in mode for testing/sensitive repos. -UseOfficialHome
-# remains accepted as an explicit/documenting no-op for older instructions.
+# Preserve normal user configuration. If the caller already set GROK_HOME,
+# normal mode leaves it alone. Otherwise official Grok defaults to ~/.grok.
+# -UseOfficialHome explicitly forces ~/.grok; -IsolatedHome explicitly uses a
+# separate ~/.grok-safe (or GROK_SAFE_HOME) for unusually sensitive testing.
 if ($IsolatedHome) {
     if ($env:GROK_SAFE_HOME) {
         $env:GROK_HOME = $env:GROK_SAFE_HOME
@@ -130,7 +130,9 @@ if ($IsolatedHome) {
         $env:GROK_HOME = Join-Path $HOME '.grok-safe'
     }
     New-Item -ItemType Directory -Force -Path $env:GROK_HOME | Out-Null
-} else {
+} elseif ($UseOfficialHome) {
+    $env:GROK_HOME = Join-Path $HOME '.grok'
+} elseif (-not $env:GROK_HOME) {
     $env:GROK_HOME = Join-Path $HOME '.grok'
 }
 
