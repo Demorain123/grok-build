@@ -16,18 +16,21 @@ Normal / intentional behavior
   native/user/project MCP servers                             ALLOWED
   hooks/plugins/skills/shell/web tools                        ALLOWED
   existing ~/.grok config and credentials                     ALLOWED
+  explicit remote session read/restore/share backend          ALLOWED
 
 Grok-owned non-inference persistence / auxiliary paths
   /v1/storage, GCS, S3, signed/multipart artifacts            BLOCKED
   workspace/session artifact upload queue                     BLOCKED at shared upload layer
-  code.grok.com remote session writeback/share backend        BLOCKED
-  cli-chat-proxy cross-host SessionRegistry replication       BLOCKED
+  automatic remote session Writeback                          BLOCKED
+  cli-chat-proxy cross-host SessionRegistry writes            BLOCKED
   product telemetry / Mixpanel                                BLOCKED
   Grok internal + external OTLP export                        BLOCKED
   feedback + session signals / per-turn analytics             BLOCKED
   remote memory embedding text -> /embeddings                 BLOCKED
   in-app binary replacement/update                            BLOCKED
 ```
+
+A deliberately shared session can still use the normal inline `code.grok.com` share path. If a very large share requires the upstream GCS artifact-upload fallback, that fallback remains blocked because it uses the same storage surface this project is designed to harden.
 
 ## Architecture
 
@@ -37,9 +40,9 @@ The official source stays unchanged in Git history. Hardening lives in ordered p
 upstream-compatible source
         |
         v
-0001 storage/writeback/telemetry/update
+0001 storage/background-writeback/telemetry/update
 0002 feedback/session-signals/turn-deltas
-0003 SessionRegistry cross-host replication
+0003 SessionRegistry write replication
 0004 remote memory embedding
         |
         v
@@ -118,7 +121,7 @@ These extension switches never re-enable the hidden storage/session-sync/telemet
 
 - verifies the built EXE against its SHA256/build manifest;
 - forces the reviewed storage/session/analytics escape hatches to `0`;
-- keeps session persistence local and disables the remote code-session backend;
+- forces automatic session persistence to local mode while retaining explicit remote read/restore/share operations;
 - disables Grok-owned telemetry/feedback/OTLP configuration;
 - **does not modify generic `OTEL_*` environment variables**, because MCP/hooks/shell child processes may legitimately depend on them;
 - keeps normal MCP/hooks/plugins and the official Grok home by default.
@@ -175,15 +178,15 @@ A releasable build should satisfy all of these:
 1. Every hardening patch applies to the exact reviewed source context.
 2. Shared `upload_bytes`, `upload_bytes_signed`, `upload_file`, and `upload_stream` fail closed before backend selection.
 3. Direct `StorageClient` construction cannot reach the real storage proxy in safe mode.
-4. Remote session writeback and `code.grok.com` synchronization are disabled while local sessions remain available.
-5. `SessionRegistryClient` cannot write cross-host replicas.
+4. Automatic session Writeback is forced to local mode; explicit remote read/restore/share behavior remains available.
+5. `SessionRegistryClient` cannot write cross-host replicas, while its read/search/download methods remain available.
 6. Product telemetry, Mixpanel, Grok OTLP, feedback/session signals and per-turn analytics are blocked.
 7. Remote memory embedding text is blocked; local FTS memory remains available.
 8. The in-app updater cannot replace the hardened executable.
 9. Workspace upload/recovery continues to funnel through the guarded shared upload layer; new direct HTTP/cloud SDK sinks fail audit.
 10. Normal MCP/hooks/plugins remain available by default; strict extension isolation is opt-in.
 11. Generic child-process `OTEL_*` environment is not globally disabled by the wrapper.
-12. Windows CI must pass static audits, build the final `xai-grok-pager-bin --release`, and smoke-test the produced EXE for the exact commit.
+12. Windows CI must pass static audits, build the final `xai-grok-pager-bin --release`, smoke-test the EXE, and verify the MCP command surface for the exact commit.
 
 ## Deliberate test escape hatches
 
