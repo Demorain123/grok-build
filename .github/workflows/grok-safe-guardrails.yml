@@ -135,9 +135,21 @@ jobs:
           git apply --recount -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
           git diff --check
 
-      - name: Compile every patched crate
+      - name: Compile xai-file-utils hardening
         shell: pwsh
-        run: cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update -p xai-grok-telemetry
+        run: cargo check -p xai-file-utils
+
+      - name: Compile xai-grok-telemetry hardening
+        shell: pwsh
+        run: cargo check -p xai-grok-telemetry
+
+      - name: Compile xai-grok-shell hardening
+        shell: pwsh
+        run: cargo check -p xai-grok-shell
+
+      - name: Compile xai-grok-update hardening
+        shell: pwsh
+        run: cargo check -p xai-grok-update
 
       - name: Link Windows hardened release
         shell: pwsh
