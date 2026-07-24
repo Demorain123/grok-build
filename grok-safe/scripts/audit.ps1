@@ -64,18 +64,27 @@ try {
     $gcsText = Get-Content -Raw -LiteralPath $gcsPath
     $gcsMatches = [regex]::Matches($gcsText, 'pub\s+async\s+fn\s+(upload_[A-Za-z0-9_]+)')
     $actualGcs = @($gcsMatches | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-    $expectedGcs = @('upload_bytes', 'upload_bytes_signed', 'upload_file', 'upload_stream')
 
-    $unexpectedGcs = @($actualGcs | Where-Object { $_ -notin $expectedGcs })
+    # Four top-level dispatchers must fail before backend selection. Upstream also
+    # exposes upload_bytes_via_signed_url directly; that helper is intentionally
+    # covered by the patched StorageClient::with_provider loopback defense.
+    $guardedDispatchers = @('upload_bytes', 'upload_bytes_signed', 'upload_file', 'upload_stream')
+    $storageClientCoveredHelpers = @('upload_bytes_via_signed_url')
+    $knownPublicUploadHelpers = @($guardedDispatchers + $storageClientCoveredHelpers | Sort-Object -Unique)
+
+    $unexpectedGcs = @($actualGcs | Where-Object { $_ -notin $knownPublicUploadHelpers })
     if ($unexpectedGcs.Count -gt 0) {
         Fail ('new public cloud-upload helper(s) require review: ' + ($unexpectedGcs -join ', '))
     }
-    foreach ($name in $expectedGcs) {
+    foreach ($name in $knownPublicUploadHelpers) {
         if ($name -notin $actualGcs) {
             Fail "expected upload helper disappeared or was renamed: $name; review the upstream refactor before building"
         }
+    }
+    foreach ($name in $guardedDispatchers) {
         Require-Contains $patchText ('grok_safe_block_cloud_storage_upload("' + $name + '")') "patch has no fail-closed guard for $name"
     }
+    Require-Contains $patchText 'grok-safe-storage-blocked' 'StorageClient loopback defense required by signed-url helper is missing'
 
     Write-Host '[3/10] Checking storage/backend bypasses with real file-content scanning...'
     # IMPORTANT: use -Path explicitly. Piping FileInfo objects to Select-String can
