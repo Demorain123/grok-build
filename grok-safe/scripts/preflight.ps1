@@ -46,7 +46,11 @@ Test-NonEmptyDirectory '.grok\skills' 'Project Grok skills/instructions are load
 $grokConfig = Join-Path $root '.grok\config.toml'
 if (Test-Path -LiteralPath $grokConfig -PathType Leaf) {
     $text = Get-Content -Raw -LiteralPath $grokConfig
-    if ($text -match '(?im)^\s*\[mcp_servers\.' -or $text -match '(?im)^\s*\[plugins(?:\.|\])') {
+    $declaresMcp = $text -match '(?im)^\s*\[mcp_servers(?:\.|\])' -or
+        $text -match '(?im)^\s*mcp_servers\s*='
+    $declaresPlugins = $text -match '(?im)^\s*\[plugins(?:\.|\])' -or
+        $text -match '(?im)^\s*plugins\s*='
+    if ($declaresMcp -or $declaresPlugins) {
         Add-Finding $high 'Project .grok/config.toml declares MCP servers or plugins'
     } elseif ($text -match '(?im)^\s*\[') {
         Add-Finding $medium 'Project .grok/config.toml exists (permissions/config should still be reviewed)'
