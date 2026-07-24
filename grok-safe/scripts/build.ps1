@@ -159,8 +159,18 @@ try {
                     }
                 }
 
-                Write-Host 'Building hardened Grok Build Windows release (production hard gate)...'
-                & cargo build -p xai-grok-pager-bin --release
+                Write-Host 'Building hardened Grok Build release (production hard gate)...'
+                if ($IsWindows) {
+                    # rustc's MSVC backend requests a PDB even for ordinary release
+                    # builds. Grok Build is large enough to hit MSVC LNK1318 LIMIT (12)
+                    # while creating that PDB. We do not distribute or consume the PDB,
+                    # so disable only final-binary PDB generation. Runtime code,
+                    # optimization, MCP and the hardening patches are unchanged.
+                    Write-Host 'Windows release PDB: disabled (/DEBUG:NONE) to avoid MSVC LNK1318 LIMIT (12).'
+                    & cargo rustc -p xai-grok-pager-bin --release --bin xai-grok-pager -- -C 'link-arg=/DEBUG:NONE'
+                } else {
+                    & cargo build -p xai-grok-pager-bin --release
+                }
                 if ($LASTEXITCODE -ne 0) { throw 'cargo release build failed' }
             }
             finally {
@@ -210,10 +220,11 @@ try {
             cargo_version = $cargoVersion
             rustc_version = $rustcVersion
             protoc_version = $protocVersion
+            windows_release_pdb = $(if ($IsWindows) { 'disabled-via-debug-none' } else { 'not-applicable' })
             built_at_utc = [DateTime]::UtcNow.ToString('o')
             blocked_by_default = @(
                 'cloud-storage-artifact-uploads',
-                'remote-session-writeback-and-sharing-backend',
+                'automatic-remote-session-writeback',
                 'cross-host-session-registry-replication',
                 'product-telemetry-and-mixpanel',
                 'internal-and-external-otlp-export',
