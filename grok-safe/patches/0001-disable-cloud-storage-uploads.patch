@@ -105,3 +105,134 @@ diff --git a/crates/codegen/xai-file-utils/src/storage_client.rs b/crates/codege
              retry_config: RetryConfig::default(),
              attribution: None,
              credentials,
+diff --git a/crates/codegen/xai-grok-shell/src/agent/init.rs b/crates/codegen/xai-grok-shell/src/agent/init.rs
+--- a/crates/codegen/xai-grok-shell/src/agent/init.rs
++++ b/crates/codegen/xai-grok-shell/src/agent/init.rs
+@@ -14,6 +14,17 @@ use crate::agent::models::ModelsManager;
+ use crate::auth::AuthManager;
+ use crate::config::StorageMode;
+ 
++const GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC";
++
++fn grok_safe_remote_sync_allowed() -> bool {
++    matches!(
++        std::env::var(GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC).as_deref(),
++        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++    )
++}
++
+ /// Resolve config, init process singletons, build the model catalog.
+ ///
+ /// The `ModelsManager` is `Clone + Send`, so callers that need a handle
+@@ -106,6 +117,14 @@ fn resolve_config(cfg: &AgentConfig, auth_manager: &AuthManager) -> AgentConfig {
+     {
+         cfg.storage_mode = StorageMode::resolve(None, cfg.remote_settings.as_ref());
+     }
++    if !grok_safe_remote_sync_allowed() && cfg.storage_mode != StorageMode::Local {
++        tracing::info!(
++            previous = ?cfg.storage_mode,
++            "grok-safe: forcing local session storage; remote writeback/share sync is disabled"
++        );
++        cfg.storage_mode = StorageMode::Local;
++    }
+     // Writeback talks to the code backend; requires grok.com auth.
+     if cfg.storage_mode == StorageMode::Writeback
+         && !auth_manager.current().is_some_and(|a| a.is_xai_auth())
+diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen/xai-grok-shell/src/remote/client.rs
+--- a/crates/codegen/xai-grok-shell/src/remote/client.rs
++++ b/crates/codegen/xai-grok-shell/src/remote/client.rs
+@@ -8,8 +8,30 @@ use prod_mc_cli_chat_proxy_types::SubagentBundle;
+ use serde::{Deserialize, Serialize};
+ use std::time::Duration;
+ const GROK_CODE_BACKEND_URL: &str = "https://code.grok.com";
++const GROK_SAFE_BLOCKED_CODE_BACKEND_URL: &str =
++    "http://127.0.0.1:9/grok-safe-remote-sync-blocked";
++const GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC";
+ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+ const GROK_CODE_WEB_URL: &str = "https://grok.com";
++
++fn grok_safe_remote_sync_allowed() -> bool {
++    matches!(
++        std::env::var(GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC).as_deref(),
++        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++    )
++}
++
++fn grok_safe_code_backend_url(candidate: String) -> String {
++    if grok_safe_remote_sync_allowed() {
++        candidate
++    } else {
++        GROK_SAFE_BLOCKED_CODE_BACKEND_URL.to_owned()
++    }
++}
++
+ /// Build a share URL from a permission ID
+ pub fn share_url(permission_id: &str) -> String {
+     let web_url =
+@@ -303,8 +325,10 @@ impl BackendClient {
+         Self {
+             client: reqwest_middleware::ClientBuilder::new(reqwest_client.clone()).build(),
+             reqwest_client,
+-            base_url: std::env::var("GROK_CODE_BACKEND_URL")
+-                .unwrap_or_else(|_| GROK_CODE_BACKEND_URL.to_string()),
++            base_url: grok_safe_code_backend_url(
++                std::env::var("GROK_CODE_BACKEND_URL")
++                    .unwrap_or_else(|_| GROK_CODE_BACKEND_URL.to_string()),
++            ),
+             auth_manager: None,
+         }
+     }
+@@ -313,7 +337,7 @@ impl BackendClient {
+         Self {
+             client: reqwest_middleware::ClientBuilder::new(reqwest_client.clone()).build(),
+             reqwest_client,
+-            base_url: base_url.into(),
++            base_url: grok_safe_code_backend_url(base_url.into()),
+             auth_manager: None,
+         }
+     }
+diff --git a/crates/codegen/xai-grok-update/src/auto_update.rs b/crates/codegen/xai-grok-update/src/auto_update.rs
+--- a/crates/codegen/xai-grok-update/src/auto_update.rs
++++ b/crates/codegen/xai-grok-update/src/auto_update.rs
+@@ -19,6 +19,17 @@ use xai_grok_shell::util::config;
+ use xai_grok_shell::util::grok_home::{grok_application, grok_home};
+ 
++const GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE";
++
++fn grok_safe_self_update_allowed() -> bool {
++    matches!(
++        std::env::var(GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE).as_deref(),
++        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++    )
++}
++
+ #[derive(Clone, Copy, Debug)]
+ pub enum UpdateRunMode {
+     Blocking,
+@@ -361,6 +372,10 @@ fn env_installer() -> Option<&'static str> {
+ }
+ 
+ pub async fn get_installer() -> Option<&'static str> {
++    if !grok_safe_self_update_allowed() {
++        return None;
++    }
++
+     if let Some(i) = env_installer() {
+         return Some(i);
+     }
+@@ -761,6 +776,13 @@ pub async fn run_install_script(
+     target: Option<&str>,
+     update_config: &UpdateConfig,
+ ) -> Result<()> {
++    if !grok_safe_self_update_allowed() {
++        anyhow::bail!(
++            "grok-safe: in-app self-update is disabled; sync upstream and rebuild through grok-safe/scripts/build.ps1 instead"
++        );
++    }
++
+     let result = match installer {
+         "npm" => install_npm(
+             target,
