@@ -321,3 +321,15 @@ diff --git a/crates/codegen/xai-grok-update/src/auto_update.rs b/crates/codegen/
 +
      let result = match installer {
          "npm" => install_npm(
+diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen/xai-grok-shell/src/remote/client.rs
+--- a/crates/codegen/xai-grok-shell/src/remote/client.rs
++++ b/crates/codegen/xai-grok-shell/src/remote/client.rs
+@@ -8,6 +8,9 @@ use prod_mc_cli_chat_proxy_types::SubagentBundle;
+ use serde::{Deserialize, Serialize};
+ use std::time::Duration;
+ const GROK_CODE_BACKEND_URL: &str = "https://code.grok.com";
++// grok-safe-remote-sync-blocked: automatic writeback is disabled by forcing
++// StorageMode::Local; explicit remote session read/restore/share operations
++// intentionally retain the upstream BackendClient behavior.
+ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+ const GROK_CODE_WEB_URL: &str = "https://grok.com";
