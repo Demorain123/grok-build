@@ -17,7 +17,14 @@ $TargetDir = Join-Path $CacheDir 'target'
 $oldProtoc = $env:PROTOC
 $oldSafeProtocVersion = $env:GROK_SAFE_PROTOC_VERSION
 
-foreach ($cmd in @('git', 'cargo', 'rustc', 'dotslash')) {
+# On Windows, ensure-windows-protoc.ps1 sets PROTOC to a verified native
+# protoc adapter before Cargo runs. Upstream xai-proto-build checks PROTOC
+# first, so the DotSlash bin/protoc wrapper is not required on Windows.
+$requiredCommands = @('git', 'cargo', 'rustc')
+if (-not $IsWindows) {
+    $requiredCommands += 'dotslash'
+}
+foreach ($cmd in $requiredCommands) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         throw "Required command '$cmd' was not found on PATH."
     }
