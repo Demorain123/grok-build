@@ -20,10 +20,6 @@ function Require-Contains([string]$Text, [string]$Needle, [string]$Message) {
     if (-not $Text.Contains($Needle)) { Fail $Message }
 }
 
-function Require-Regex([string]$Text, [string]$Pattern, [string]$Message) {
-    if ($Text -notmatch $Pattern) { Fail $Message }
-}
-
 Push-Location $RepoRoot
 try {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -86,7 +82,7 @@ try {
     }
     Require-Contains $patchText 'grok-safe-storage-blocked' 'StorageClient loopback defense required by signed-url helper is missing'
 
-    Write-Host '[3/10] Checking storage/backend bypasses with real file-content scanning...'
+    Write-Host '[3/10] Checking storage/backend bypasses and cloud SDK placement...'
     # IMPORTANT: use -Path explicitly. Piping FileInfo objects to Select-String can
     # search their string representation instead of the file contents.
     $directS3 = @(
@@ -98,11 +94,29 @@ try {
         Fail ('direct S3 upload bypass found outside gcs.rs: ' + ($paths -join '; '))
     }
 
+    $awsSdkHits = @(Select-String -Path $rustPaths -SimpleMatch 'aws_sdk_s3')
+    $unexpectedAwsSdk = @($awsSdkHits | Where-Object { $_.Path -notlike '*\xai-file-utils\src\s3.rs' })
+    if ($unexpectedAwsSdk.Count -gt 0) {
+        $paths = $unexpectedAwsSdk | ForEach-Object { "$($_.Path):$($_.LineNumber)" }
+        Fail ('AWS S3 SDK appeared outside the reviewed xai-file-utils/s3.rs boundary: ' + ($paths -join '; '))
+    }
+
+    $gcsSdkHits = @(Select-String -Path $rustPaths -SimpleMatch 'gcloud_storage')
+    $unexpectedGcsSdk = @($gcsSdkHits | Where-Object { $_.Path -notlike '*\xai-file-utils\src\gcs.rs' })
+    if ($unexpectedGcsSdk.Count -gt 0) {
+        $paths = $unexpectedGcsSdk | ForEach-Object { "$($_.Path):$($_.LineNumber)" }
+        Fail ('GCS SDK appeared outside the reviewed xai-file-utils/gcs.rs boundary: ' + ($paths -join '; '))
+    }
+
+    $multipartHits = @(Select-String -Path $rustPaths -SimpleMatch 'reqwest::multipart')
+    $unexpectedMultipart = @($multipartHits | Where-Object { $_.Path -notlike '*\xai-file-utils\src\storage_client.rs' })
+    if ($unexpectedMultipart.Count -gt 0) {
+        $paths = $unexpectedMultipart | ForEach-Object { "$($_.Path):$($_.LineNumber)" }
+        Fail ('reqwest multipart upload surface appeared outside StorageClient: ' + ($paths -join '; '))
+    }
+
     $codeBackendHits = @(Select-String -Path $rustPaths -SimpleMatch 'https://code.grok.com')
-    $unexpectedCodeBackend = @(
-        $codeBackendHits |
-            Where-Object { $_.Path -notlike '*\xai-grok-shell\src\remote\client.rs' }
-    )
+    $unexpectedCodeBackend = @($codeBackendHits | Where-Object { $_.Path -notlike '*\xai-grok-shell\src\remote\client.rs' })
     if ($unexpectedCodeBackend.Count -gt 0) {
         $paths = $unexpectedCodeBackend | ForEach-Object { "$($_.Path):$($_.LineNumber)" }
         Fail ('new direct code.grok.com reference outside remote/client.rs requires review: ' + ($paths -join '; '))
@@ -159,7 +173,7 @@ try {
     Require-Contains $patchText 'in-app self-update is disabled' 'run_install_script fail-closed guard is missing'
 
     Write-Host '[7/10] Verifying launcher policy and inherited endpoint cleanup...'
-    $launcherRequirements = @{
+    $launcherRequirements = [ordered]@{
         'GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS' = '0'
         'GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC' = '0'
         'GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE' = '0'
@@ -174,9 +188,8 @@ try {
         'OTEL_SDK_DISABLED' = 'true'
     }
     foreach ($entry in $launcherRequirements.GetEnumerator()) {
-        $escapedName = [regex]::Escape($entry.Key)
-        $escapedValue = [regex]::Escape($entry.Value)
-        Require-Regex $runText "(?m)^\s*\`$env:$escapedName\s*=\s*'$escapedValue'\s*$" "launcher does not force $($entry.Key)=$($entry.Value)"
+        $expectedLine = '$env:' + $entry.Key + " = '" + $entry.Value + "'"
+        Require-Contains $runText $expectedLine "launcher does not force $($entry.Key)=$($entry.Value)"
     }
     foreach ($name in @(
         'GROK_INTERNAL_OTLP_TRACES_ENDPOINT','GROK_INTERNAL_OTLP_HEADERS',
@@ -207,7 +220,10 @@ try {
     foreach ($needle in @(
         '.\grok-safe\scripts\audit.ps1',
         'git apply --recount --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch',
-        'cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update -p xai-grok-telemetry',
+        'cargo check -p xai-file-utils',
+        'cargo check -p xai-grok-telemetry',
+        'cargo check -p xai-grok-shell',
+        'cargo check -p xai-grok-update',
         'cargo build -p xai-grok-pager-bin --release'
     )) {
         Require-Contains $workflowText $needle "CI guardrail is missing required step: $needle"
@@ -217,6 +233,7 @@ try {
     $riskPatterns = @(
         '/storage','storage.googleapis.com','https://code.grok.com','save_session_data',
         'repo_state.upload','upload_multipart','batch_upload','TraceExportConfig',
+        'aws_sdk_s3','gcloud_storage','reqwest::multipart',
         'GROK_INTERNAL_OTLP_TRACES_ENDPOINT','GROK_TRACE_UPLOAD_BUCKET',
         'GROK_TELEMETRY_ENABLED','GROK_FEEDBACK_ENABLED','run_install_script'
     )
