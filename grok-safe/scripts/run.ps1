@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$UseOfficialHome,
+    [switch]$AllowProjectExtensions,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$GrokArgs
 )
@@ -11,9 +12,13 @@ Set-StrictMode -Version Latest
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SafeRoot = Resolve-Path (Join-Path $ScriptDir '..')
 $Binary = Join-Path $SafeRoot 'dist\grok-safe.exe'
+$Preflight = Join-Path $ScriptDir 'preflight.ps1'
 
 if (-not (Test-Path $Binary)) {
     throw "grok-safe.exe was not found. Build it first with: .\grok-safe\scripts\build.ps1"
+}
+if (-not (Test-Path $Preflight)) {
+    throw "grok-safe preflight script was not found: $Preflight"
 }
 
 # ---------------------------------------------------------------------------
@@ -70,8 +75,29 @@ if (-not $UseOfficialHome) {
     New-Item -ItemType Directory -Force -Path $env:GROK_HOME | Out-Null
 }
 
+# Allow callers to use the common `--` separator without forwarding it to Grok.
+if ($GrokArgs.Count -gt 0 -and $GrokArgs[0] -eq '--') {
+    $GrokArgs = @($GrokArgs | Select-Object -Skip 1)
+}
+
+# CLI-supplied plugin roots bypass project directory discovery, so treat them
+# like other project extension surfaces and require the same explicit override.
+$hasPluginDir = @($GrokArgs | Where-Object { $_ -eq '--plugin-dir' -or $_ -like '--plugin-dir=*' }).Count -gt 0
+if ($hasPluginDir -and -not $AllowProjectExtensions) {
+    throw 'grok-safe blocked --plugin-dir. Rerun with -AllowProjectExtensions only after reviewing that plugin source.'
+}
+
+Write-Host 'Running project extension preflight...'
+if ($AllowProjectExtensions) {
+    & $Preflight -ProjectPath (Get-Location).Path -AllowProjectExtensions
+} else {
+    & $Preflight -ProjectPath (Get-Location).Path
+}
+if ($LASTEXITCODE -ne 0) { throw 'grok-safe project preflight failed' }
+
 $effectiveHome = if ($env:GROK_HOME) { $env:GROK_HOME } else { Join-Path $HOME '.grok' }
 
+Write-Host ''
 Write-Host 'grok-safe privacy guard: ON' -ForegroundColor Green
 Write-Host 'Cloud/session artifact uploads: BLOCKED'
 Write-Host 'Remote session writeback/share backend: BLOCKED'
@@ -80,13 +106,8 @@ Write-Host 'Product telemetry / trace upload / feedback / external OTLP: OFF'
 Write-Host "GROK_HOME: $effectiveHome"
 Write-Host ''
 Write-Host 'Boundary: source text intentionally included in model inference can still leave the machine.' -ForegroundColor Yellow
-Write-Host 'Boundary: MCP servers, hooks, plugins, shell commands, and web tools may have their own network access.' -ForegroundColor Yellow
+Write-Host 'Boundary: explicitly trusted MCP/hooks/plugins/shell/web tools may have their own network access.' -ForegroundColor Yellow
 Write-Host ''
-
-# Allow callers to use the common `--` separator without forwarding it to Grok.
-if ($GrokArgs.Count -gt 0 -and $GrokArgs[0] -eq '--') {
-    $GrokArgs = @($GrokArgs | Select-Object -Skip 1)
-}
 
 & $Binary @GrokArgs
 exit $LASTEXITCODE
