@@ -90,6 +90,8 @@ try {
             @{ Path='crates\codegen\xai-grok-shell\src\remote\client.rs'; Needle='grok-safe-remote-sync-blocked' },
             @{ Path='crates\codegen\xai-grok-shell\src\extensions\feedback.rs'; Needle='feedback network submission is disabled' },
             @{ Path='crates\codegen\xai-grok-shell\src\agent\feedback_client.rs'; Needle='blocked feedback/session-signals auxiliary request' },
+            @{ Path='crates\codegen\xai-grok-shell\src\agent\session_registry_client.rs'; Needle='blocked session-registry remote replication request' },
+            @{ Path='crates\codegen\xai-grok-memory\src\embedding.rs'; Needle='blocked remote memory embedding text egress' },
             @{ Path='crates\codegen\xai-grok-telemetry\src\client.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
             @{ Path='crates\codegen\xai-grok-telemetry\src\external\mod.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
             @{ Path='crates\codegen\xai-grok-telemetry\src\otel_layer\mod.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
@@ -112,7 +114,7 @@ try {
             Push-Location $Worktree
             try {
                 Write-Host 'Compiling every crate modified by the security patches...'
-                & cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update -p xai-grok-telemetry
+                & cargo check -p xai-file-utils -p xai-grok-memory -p xai-grok-shell -p xai-grok-update -p xai-grok-telemetry
                 if ($LASTEXITCODE -ne 0) { throw 'focused cargo check for hardened crates failed' }
 
                 Write-Host 'Building hardened Grok Build release...'
@@ -154,9 +156,9 @@ try {
         $patchHashes | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 -Path (Join-Path $DistDir 'PATCH_SHA256.json')
 
         $buildInfo = [ordered]@{
-            schema = 3
+            schema = 4
             product = 'grok-safe'
-            policy = 'fail-closed-non-inference-egress-v4'
+            policy = 'fail-closed-non-inference-egress-v5'
             source_repository = 'https://github.com/xai-org/grok-build'
             safety_repository = 'https://github.com/Demorain123/grok-build'
             safety_branch = $sourceBranch
@@ -169,9 +171,11 @@ try {
             blocked_by_default = @(
                 'cloud-storage-artifact-uploads',
                 'remote-session-writeback-and-sharing-backend',
+                'cross-host-session-registry-replication',
                 'product-telemetry-and-mixpanel',
                 'internal-and-external-otlp-export',
                 'feedback-and-session-analytics-egress',
+                'remote-memory-embedding-text-egress',
                 'in-app-self-update'
             )
         }
