@@ -2,6 +2,7 @@
 param(
     [switch]$UseOfficialHome,
     [switch]$AllowProjectExtensions,
+    [switch]$AllowVendorCompatibility,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$GrokArgs
 )
@@ -46,6 +47,29 @@ $env:GROK_FEEDBACK_ENABLED = 'false'
 $env:GROK_EXTERNAL_OTEL = '0'
 $env:OTEL_TRACES_EXPORTER = 'none'
 $env:OTEL_SDK_DISABLED = 'true'
+
+# Claude/Cursor compatibility defaults ON upstream and may auto-discover MCPs,
+# hooks, rules, agents, skills and session data outside GROK_HOME. Disable those
+# foreign discovery surfaces unless the operator explicitly opts in for this run.
+if (-not $AllowVendorCompatibility) {
+    foreach ($name in @(
+        'GROK_CLAUDE_SKILLS_ENABLED',
+        'GROK_CLAUDE_RULES_ENABLED',
+        'GROK_CLAUDE_AGENTS_ENABLED',
+        'GROK_CLAUDE_MCPS_ENABLED',
+        'GROK_CLAUDE_HOOKS_ENABLED',
+        'GROK_CLAUDE_SESSIONS_ENABLED',
+        'GROK_CURSOR_SKILLS_ENABLED',
+        'GROK_CURSOR_RULES_ENABLED',
+        'GROK_CURSOR_AGENTS_ENABLED',
+        'GROK_CURSOR_MCPS_ENABLED',
+        'GROK_CURSOR_HOOKS_ENABLED',
+        'GROK_CURSOR_SESSIONS_ENABLED',
+        'GROK_CODEX_SESSIONS_ENABLED'
+    )) {
+        Set-Item -Path "Env:$name" -Value 'false'
+    }
+}
 
 # Remove inherited destinations/credentials/content gates for all known
 # auxiliary telemetry/storage paths. Do not clear HTTP(S)_PROXY because the
@@ -114,6 +138,7 @@ Write-Host 'Cloud/session artifact uploads: BLOCKED'
 Write-Host 'Remote session writeback/share backend: BLOCKED'
 Write-Host 'In-app self-update: BLOCKED (sync + rebuild instead)'
 Write-Host 'Product telemetry / internal+external OTLP / feedback: BLOCKED'
+Write-Host ("Claude/Cursor compatibility discovery: {0}" -f $(if ($AllowVendorCompatibility) { 'EXPLICITLY ALLOWED' } else { 'BLOCKED' }))
 Write-Host "GROK_HOME: $effectiveHome"
 Write-Host ''
 Write-Host 'Boundary: source text intentionally included in model inference can still leave the machine.' -ForegroundColor Yellow
