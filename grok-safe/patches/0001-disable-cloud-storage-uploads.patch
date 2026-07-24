@@ -1,7 +1,7 @@
 diff --git a/crates/codegen/xai-file-utils/src/gcs.rs b/crates/codegen/xai-file-utils/src/gcs.rs
 --- a/crates/codegen/xai-file-utils/src/gcs.rs
 +++ b/crates/codegen/xai-file-utils/src/gcs.rs
-@@ -16,6 +16,29 @@ use xai_grok_auth::{AuthCredentialProvider, StaticAuthCredentialProvider};
+@@ -16,6 +16,27 @@ use xai_grok_auth::{AuthCredentialProvider, StaticAuthCredentialProvider};
  
  use crate::storage_client::{Auth401AttributionCallback, StaticGrokAuth, StorageClient};
  
@@ -29,7 +29,7 @@ diff --git a/crates/codegen/xai-file-utils/src/gcs.rs b/crates/codegen/xai-file-
  /// Threshold for switching to multipart upload (50 MB).
  ///
  /// Files larger than this use `StorageClient::upload_multipart()` (signed URLs,
-@@ -106,6 +129,7 @@ pub async fn upload_bytes<C: StorageConfig>(
+@@ -106,6 +127,7 @@ pub async fn upload_bytes<C: StorageConfig>(
      content: &[u8],
      content_type: &str,
  ) -> anyhow::Result<String> {
@@ -37,7 +37,7 @@ diff --git a/crates/codegen/xai-file-utils/src/gcs.rs b/crates/codegen/xai-file-
      match config.upload_method() {
          UploadMethod::Direct {
              service_account_key,
-@@ -197,6 +221,7 @@ pub async fn upload_bytes_signed<C: StorageConfig>(
+@@ -197,6 +219,7 @@ pub async fn upload_bytes_signed<C: StorageConfig>(
      content: &[u8],
      content_type: &str,
  ) -> anyhow::Result<String> {
@@ -45,7 +45,7 @@ diff --git a/crates/codegen/xai-file-utils/src/gcs.rs b/crates/codegen/xai-file-
      match config.upload_method() {
          UploadMethod::Direct { .. } => {
              // Direct mode already bypasses the proxy — reuse the existing path.
-@@ -245,6 +270,7 @@ pub async fn upload_file<C: StorageConfig>(
+@@ -245,6 +268,7 @@ pub async fn upload_file<C: StorageConfig>(
      file_path: &Path,
      content_type: &str,
  ) -> anyhow::Result<String> {
@@ -53,7 +53,7 @@ diff --git a/crates/codegen/xai-file-utils/src/gcs.rs b/crates/codegen/xai-file-
      match config.upload_method() {
          UploadMethod::Direct {
              service_account_key,
-@@ -324,6 +350,7 @@ pub async fn upload_stream<C: StorageConfig, R>(
+@@ -324,6 +348,7 @@ pub async fn upload_stream<C: StorageConfig, R>(
  where
      R: tokio::io::AsyncRead + Send + Sync + 'static,
  {
@@ -64,7 +64,7 @@ diff --git a/crates/codegen/xai-file-utils/src/gcs.rs b/crates/codegen/xai-file-
 diff --git a/crates/codegen/xai-file-utils/src/storage_client.rs b/crates/codegen/xai-file-utils/src/storage_client.rs
 --- a/crates/codegen/xai-file-utils/src/storage_client.rs
 +++ b/crates/codegen/xai-file-utils/src/storage_client.rs
-@@ -44,6 +44,18 @@ use crate::circuit_breaker_observer::TracingObserver;
+@@ -44,6 +44,16 @@ use crate::circuit_breaker_observer::TracingObserver;
  
  const STORAGE_BREAKER_NAME: &str = "storage_breaker";
  
@@ -81,7 +81,7 @@ diff --git a/crates/codegen/xai-file-utils/src/storage_client.rs b/crates/codege
  fn storage_breaker_config() -> BreakerConfig {
      BreakerConfig::client()
  }
-@@ -216,13 +228,21 @@ impl StorageClient {
+@@ -216,13 +226,22 @@ impl StorageClient {
          http_client: Client,
          credentials: Arc<dyn AuthCredentialProvider>,
      ) -> Self {
@@ -108,7 +108,7 @@ diff --git a/crates/codegen/xai-file-utils/src/storage_client.rs b/crates/codege
 diff --git a/crates/codegen/xai-grok-shell/src/agent/init.rs b/crates/codegen/xai-grok-shell/src/agent/init.rs
 --- a/crates/codegen/xai-grok-shell/src/agent/init.rs
 +++ b/crates/codegen/xai-grok-shell/src/agent/init.rs
-@@ -14,6 +14,17 @@ use crate::agent::models::ModelsManager;
+@@ -14,6 +14,16 @@ use crate::agent::models::ModelsManager;
  use crate::auth::AuthManager;
  use crate::config::StorageMode;
  
@@ -125,7 +125,7 @@ diff --git a/crates/codegen/xai-grok-shell/src/agent/init.rs b/crates/codegen/xa
  /// Resolve config, init process singletons, build the model catalog.
  ///
  /// The `ModelsManager` is `Clone + Send`, so callers that need a handle
-@@ -106,6 +117,14 @@ fn resolve_config(cfg: &AgentConfig, auth_manager: &AuthManager) -> AgentConfig {
+@@ -106,6 +116,13 @@ fn resolve_config(cfg: &AgentConfig, auth_manager: &AuthManager) -> AgentConfig {
      {
          cfg.storage_mode = StorageMode::resolve(None, cfg.remote_settings.as_ref());
      }
@@ -142,7 +142,7 @@ diff --git a/crates/codegen/xai-grok-shell/src/agent/init.rs b/crates/codegen/xa
 diff --git a/crates/codegen/xai-grok-shell/src/extensions/feedback.rs b/crates/codegen/xai-grok-shell/src/extensions/feedback.rs
 --- a/crates/codegen/xai-grok-shell/src/extensions/feedback.rs
 +++ b/crates/codegen/xai-grok-shell/src/extensions/feedback.rs
-@@ -26,6 +26,18 @@ use xai_file_utils::gcs::upload_bytes;
+@@ -26,6 +26,16 @@ use xai_file_utils::gcs::upload_bytes;
  use xai_grok_telemetry::id::agent_id;
  
 +const GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS: &str =
@@ -159,7 +159,7 @@ diff --git a/crates/codegen/xai-grok-shell/src/extensions/feedback.rs b/crates/c
  #[tracing::instrument(skip_all, fields(method = %args.method))]
  pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
      match args.method.as_ref() {
-@@ -82,6 +94,12 @@ async fn handle_btw(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+@@ -82,6 +92,12 @@ async fn handle_btw(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
  }
  
  async fn handle_feedback(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
@@ -175,7 +175,7 @@ diff --git a/crates/codegen/xai-grok-shell/src/extensions/feedback.rs b/crates/c
 diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen/xai-grok-shell/src/remote/client.rs
 --- a/crates/codegen/xai-grok-shell/src/remote/client.rs
 +++ b/crates/codegen/xai-grok-shell/src/remote/client.rs
-@@ -8,8 +8,30 @@ use prod_mc_cli_chat_proxy_types::SubagentBundle;
+@@ -8,8 +8,28 @@ use prod_mc_cli_chat_proxy_types::SubagentBundle;
  use serde::{Deserialize, Serialize};
  use std::time::Duration;
  const GROK_CODE_BACKEND_URL: &str = "https://code.grok.com";
@@ -204,7 +204,7 @@ diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen
  /// Build a share URL from a permission ID
  pub fn share_url(permission_id: &str) -> String {
      let web_url =
-@@ -303,8 +325,10 @@ impl BackendClient {
+@@ -303,8 +323,10 @@ impl BackendClient {
          Self {
              client: reqwest_middleware::ClientBuilder::new(reqwest_client.clone()).build(),
              reqwest_client,
@@ -217,7 +217,7 @@ diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen
              auth_manager: None,
          }
      }
-@@ -313,7 +337,7 @@ impl BackendClient {
+@@ -313,7 +335,7 @@ impl BackendClient {
          Self {
              client: reqwest_middleware::ClientBuilder::new(reqwest_client.clone()).build(),
              reqwest_client,
@@ -229,7 +229,7 @@ diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen
 diff --git a/crates/codegen/xai-grok-telemetry/src/client.rs b/crates/codegen/xai-grok-telemetry/src/client.rs
 --- a/crates/codegen/xai-grok-telemetry/src/client.rs
 +++ b/crates/codegen/xai-grok-telemetry/src/client.rs
-@@ -130,6 +130,18 @@ fn normalize_tier(tier: &str) -> String {
+@@ -130,6 +130,17 @@ fn normalize_tier(tier: &str) -> String {
  }
  
  static TELEMETRY_CLIENT: OnceLock<Mutex<Option<TelemetryClient>>> = OnceLock::new();
@@ -247,7 +247,7 @@ diff --git a/crates/codegen/xai-grok-telemetry/src/client.rs b/crates/codegen/xa
  
  /// Returns `true` when telemetry mode is `Enabled`.
  /// Used by `log_event` — product analytics events only fire in `Enabled` mode.
-@@ -331,6 +343,11 @@ pub fn init(
+@@ -331,6 +342,11 @@ pub fn init(
  ) {
      let lock = TELEMETRY_CLIENT.get_or_init(|| Mutex::new(None));
      let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
@@ -259,7 +259,7 @@ diff --git a/crates/codegen/xai-grok-telemetry/src/client.rs b/crates/codegen/xa
      *guard = if mode.is_disabled() {
          None
      } else {
-@@ -366,6 +383,12 @@ pub fn init_if_needed(
+@@ -366,6 +382,11 @@ pub fn init_if_needed(
      subscription_tier: Option<String>,
      http_client: reqwest::Client,
  ) {
@@ -274,7 +274,7 @@ diff --git a/crates/codegen/xai-grok-telemetry/src/client.rs b/crates/codegen/xa
 diff --git a/crates/codegen/xai-grok-telemetry/src/external/mod.rs b/crates/codegen/xai-grok-telemetry/src/external/mod.rs
 --- a/crates/codegen/xai-grok-telemetry/src/external/mod.rs
 +++ b/crates/codegen/xai-grok-telemetry/src/external/mod.rs
-@@ -46,6 +46,18 @@ pub use config::{ContentGates, ExternalOtelConfig, ExternalOtelFileConfig};
+@@ -46,6 +46,17 @@ pub use config::{ContentGates, ExternalOtelConfig, ExternalOtelFileConfig};
  
  static EXTERNAL: OnceLock<Option<Arc<ExternalTelemetry>>> = OnceLock::new();
 +
@@ -291,7 +291,7 @@ diff --git a/crates/codegen/xai-grok-telemetry/src/external/mod.rs b/crates/code
  
  /// Identity *attributes* (plain id strings — never tokens). Derived from a
  /// `CredentialSnapshot` at the telemetry-client init sites; updated post-auth
-@@ -135,6 +147,11 @@ pub struct ExternalTelemetry {
+@@ -135,6 +146,10 @@ pub struct ExternalTelemetry {
  /// config resolution, **before auth** (no credentials needed). `None` records
  /// the dormant state — the default path allocates nothing.
  pub fn init(cfg: Option<ExternalOtelConfig>) {
@@ -305,7 +305,7 @@ diff --git a/crates/codegen/xai-grok-telemetry/src/external/mod.rs b/crates/code
 diff --git a/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs b/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs
 --- a/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs
 +++ b/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs
-@@ -19,6 +19,18 @@ mod redact;
+@@ -19,6 +19,17 @@ mod redact;
  static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
  const ENV_OTEL_FILTER: &str = "GROK_OTEL_FILTER";
  const DEFAULT_OTEL_FILTER: &str = "info";
@@ -323,7 +323,7 @@ diff --git a/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs b/crates/co
  /// Configuration for [`build_otel_layer`]. Encapsulates all the runtime values
  /// the layer needs that used to be reach-ins into shell-internal types
  /// (`AuthManager`, `EndpointsConfig`, `GrokComConfig`).
-@@ -108,6 +120,9 @@ where
+@@ -108,6 +119,9 @@ where
          .with_filter(otel_filter)
  }
  fn build_tracer_provider(client: OtelClientInfo, config: OtelLayerConfig) -> SdkTracerProvider {
@@ -336,7 +336,7 @@ diff --git a/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs b/crates/co
 diff --git a/crates/codegen/xai-grok-update/src/auto_update.rs b/crates/codegen/xai-grok-update/src/auto_update.rs
 --- a/crates/codegen/xai-grok-update/src/auto_update.rs
 +++ b/crates/codegen/xai-grok-update/src/auto_update.rs
-@@ -19,6 +19,17 @@ use xai_grok_shell::util::config;
+@@ -19,6 +19,16 @@ use xai_grok_shell::util::config;
  use xai_grok_shell::util::grok_home::{grok_application, grok_home};
  
 +const GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE: &str =
@@ -352,7 +352,7 @@ diff --git a/crates/codegen/xai-grok-update/src/auto_update.rs b/crates/codegen/
  #[derive(Clone, Copy, Debug)]
  pub enum UpdateRunMode {
      Blocking,
-@@ -361,6 +372,10 @@ fn env_installer() -> Option<&'static str> {
+@@ -361,6 +371,10 @@ fn env_installer() -> Option<&'static str> {
  }
  
  pub async fn get_installer() -> Option<&'static str> {
@@ -363,7 +363,7 @@ diff --git a/crates/codegen/xai-grok-update/src/auto_update.rs b/crates/codegen/
      if let Some(i) = env_installer() {
          return Some(i);
      }
-@@ -761,6 +776,13 @@ pub async fn run_install_script(
+@@ -761,6 +775,12 @@ pub async fn run_install_script(
      target: Option<&str>,
      update_config: &UpdateConfig,
  ) -> Result<()> {
