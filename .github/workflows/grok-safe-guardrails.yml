@@ -25,6 +25,7 @@ on:
       - 'crates/codegen/xai-mixpanel/**'
       - 'crates/common/xai-tracing/src/http_client.rs'
       - 'prod/mc/cli-chat-proxy-types/**'
+      - 'bin/protoc'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -47,6 +48,7 @@ jobs:
       - name: Checkout exact safety commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -132,6 +134,7 @@ jobs:
       - name: Checkout exact safety commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -148,6 +151,10 @@ jobs:
       - name: Verify DotSlash
         shell: pwsh
         run: dotslash --version
+
+      - name: Prepare verified upstream-matched Windows protoc
+        shell: pwsh
+        run: .\grok-safe\scripts\ensure-windows-protoc.ps1 -RepoRoot (Get-Location).Path -CacheRoot (Join-Path $env:RUNNER_TEMP 'grok-safe-protoc')
 
       - name: Apply ordered hardening patch set
         shell: pwsh
@@ -216,3 +223,54 @@ jobs:
           $env:GROK_HOME = Join-Path $env:RUNNER_TEMP 'grok-safe-mcp-smoke-home'
           New-Item -ItemType Directory -Force -Path $env:GROK_HOME | Out-Null
           .\target\release\xai-grok-pager.exe mcp list --json
+
+      - name: Package reviewed grok-safe Windows bundle
+        shell: pwsh
+        run: |
+          $dist = Join-Path (Get-Location) 'grok-safe\dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $destExe = Join-Path $dist 'grok-safe.exe'
+          Copy-Item -Force .\target\release\xai-grok-pager.exe $destExe
+          $exeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destExe).Hash.ToLowerInvariant()
+          Set-Content -NoNewline -Encoding ascii -Path (Join-Path $dist 'grok-safe.exe.sha256') -Value "$exeHash  grok-safe.exe"
+
+          $sourceCommit = (git rev-parse HEAD).Trim()
+          $upstreamBase = (git merge-base HEAD origin/main).Trim()
+          Set-Content -NoNewline -Encoding ascii -Path (Join-Path $dist 'SOURCE_COMMIT.txt') -Value $sourceCommit
+
+          $patchHashes = [ordered]@{}
+          Get-ChildItem .\grok-safe\patches\*.patch | Sort-Object Name | ForEach-Object {
+            $patchHashes[$_.Name] = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+          }
+          $patchHashes | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 -Path (Join-Path $dist 'PATCH_SHA256.json')
+
+          $buildInfo = [ordered]@{
+            schema = 5
+            product = 'grok-safe'
+            policy = 'fail-closed-non-inference-egress-v5'
+            source_repository = 'https://github.com/xai-org/grok-build'
+            safety_repository = 'https://github.com/Demorain123/grok-build'
+            safety_branch = '${{ github.head_ref || github.ref_name }}'
+            safety_commit = $sourceCommit
+            upstream_base_commit = $upstreamBase
+            binary_sha256 = $exeHash
+            hardening_patches_sha256 = $patchHashes
+            rustc_version = (rustc --version).Trim()
+            cargo_version = (cargo --version).Trim()
+            protoc_version = (& $env:PROTOC --version 2>&1 | Out-String).Trim()
+            built_at_utc = [DateTime]::UtcNow.ToString('o')
+          }
+          $buildInfo | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 -Path (Join-Path $dist 'BUILD_INFO.json')
+
+          $bundle = Join-Path $env:RUNNER_TEMP 'grok-safe-windows-x64.zip'
+          Compress-Archive -Path .\grok-safe -DestinationPath $bundle -Force
+          Write-Host "Bundle: $bundle"
+          Write-Host "Binary SHA256: $exeHash"
+
+      - name: Upload reviewed grok-safe Windows bundle
+        uses: actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd5bba # v4.3.2
+        with:
+          name: grok-safe-windows-x64
+          path: ${{ runner.temp }}\grok-safe-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
