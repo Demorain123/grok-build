@@ -55,7 +55,43 @@ jobs:
           }
           if ($failed) { exit 1 }
 
-      - name: Check hardening patch applicability
+      - name: Patch check - shared GCS dispatcher
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-file-utils/src/gcs.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Patch check - StorageClient
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-file-utils/src/storage_client.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Patch check - agent storage-mode bootstrap
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-grok-shell/src/agent/init.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Patch check - feedback handler
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-grok-shell/src/extensions/feedback.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Patch check - remote session client
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-grok-shell/src/remote/client.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Patch check - product telemetry client
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-grok-telemetry/src/client.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Patch check - external OTLP
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-grok-telemetry/src/external/mod.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Patch check - internal OTLP
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Patch check - self updater
+        shell: pwsh
+        run: git apply --check --include=crates/codegen/xai-grok-update/src/auto_update.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Check full hardening patch applicability
         shell: pwsh
         run: git apply --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
 
