@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$UseOfficialHome,
+    [switch]$StrictExtensionIsolation,
     [switch]$AllowProjectExtensions,
     [switch]$AllowVendorCompatibility,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -48,8 +49,8 @@ if (-not $buildInfo.binary_sha256 -or $buildInfo.binary_sha256.ToString().ToLowe
 }
 
 # ---------------------------------------------------------------------------
-# Fail-closed local policy. These are intentionally set (not merely cleared)
-# so an unsafe value inherited from the parent shell cannot weaken grok-safe.
+# Fail-closed local policy for Grok-owned non-inference egress. These are set
+# explicitly so inherited environment values cannot weaken the reviewed wrapper.
 # ---------------------------------------------------------------------------
 $env:GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS = '0'
 $env:GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC = '0'
@@ -61,8 +62,9 @@ $env:GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS = '0'
 $env:GROK_STORAGE_MODE = 'local'
 $env:GROK_CODE_BACKEND_URL = 'http://127.0.0.1:9/grok-safe-remote-sync-blocked'
 
-# Disable SpaceXAI product telemetry, trace uploads, feedback forwarding, and
-# both internal and external OTLP. Normal model inference is unaffected.
+# Disable product telemetry, trace uploads, feedback analytics, and both
+# internal/external OTLP. Normal inference, tools, MCP, hooks and plugins are
+# intentionally not disabled here.
 $env:GROK_TELEMETRY_ENABLED = 'false'
 $env:GROK_TELEMETRY_TRACE_UPLOAD = 'false'
 $env:GROK_TELEMETRY_MIXPANEL_ENABLED = 'false'
@@ -71,10 +73,10 @@ $env:GROK_EXTERNAL_OTEL = '0'
 $env:OTEL_TRACES_EXPORTER = 'none'
 $env:OTEL_SDK_DISABLED = 'true'
 
-# Claude/Cursor compatibility defaults ON upstream and may auto-discover MCPs,
-# hooks, rules, agents, skills and session data outside GROK_HOME. Disable those
-# foreign discovery surfaces unless the operator explicitly opts in for this run.
-if (-not $AllowVendorCompatibility) {
+# Preserve normal Grok extension behavior by default. This includes native MCP
+# and upstream Claude/Cursor compatibility discovery. Users who explicitly want
+# a reduced extension surface for a sensitive run can opt into strict isolation.
+if ($StrictExtensionIsolation -and -not $AllowVendorCompatibility) {
     foreach ($name in @(
         'GROK_CLAUDE_SKILLS_ENABLED',
         'GROK_CLAUDE_RULES_ENABLED',
@@ -94,9 +96,9 @@ if (-not $AllowVendorCompatibility) {
     }
 }
 
-# Remove inherited destinations/credentials/content gates for all known
+# Remove inherited destinations/credentials/content gates for known Grok-owned
 # auxiliary telemetry/storage paths. Do not clear HTTP(S)_PROXY because the
-# inference/auth path may legitimately require the user's proxy.
+# inference/auth path and explicit MCP/tools may legitimately require it.
 foreach ($name in @(
     'OTEL_EXPORTER_OTLP_ENDPOINT',
     'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
@@ -124,6 +126,9 @@ foreach ($name in @(
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
 
+# Isolate the Grok user home by default for first-run/testing. Project-scoped
+# MCP/config still works. Use -UseOfficialHome when you intentionally want your
+# existing ~/.grok user MCPs, plugins, credentials and settings unchanged.
 if (-not $UseOfficialHome) {
     if ($env:GROK_SAFE_HOME) {
         $env:GROK_HOME = $env:GROK_SAFE_HOME
@@ -138,19 +143,20 @@ if ($GrokArgs.Count -gt 0 -and $GrokArgs[0] -eq '--') {
     $GrokArgs = @($GrokArgs | Select-Object -Skip 1)
 }
 
-# CLI-supplied plugin roots bypass project directory discovery, so treat them
-# like other project extension surfaces and require the same explicit override.
+# CLI-supplied plugin roots are explicit user intent. Preserve them by default;
+# strict extension isolation can require a second explicit acknowledgement.
 $hasPluginDir = @($GrokArgs | Where-Object { $_ -eq '--plugin-dir' -or $_ -like '--plugin-dir=*' }).Count -gt 0
-if ($hasPluginDir -and -not $AllowProjectExtensions) {
-    throw 'grok-safe blocked --plugin-dir. Rerun with -AllowProjectExtensions only after reviewing that plugin source.'
+if ($hasPluginDir -and $StrictExtensionIsolation -and -not $AllowProjectExtensions) {
+    throw 'Strict extension isolation blocked --plugin-dir. Rerun with -AllowProjectExtensions only after reviewing that plugin source.'
 }
 
 Write-Host 'Running project extension preflight...'
-if ($AllowProjectExtensions) {
-    & $Preflight -ProjectPath (Get-Location).Path -AllowProjectExtensions
-} else {
-    & $Preflight -ProjectPath (Get-Location).Path
+$preflightArgs = @{
+    ProjectPath = (Get-Location).Path
 }
+if ($StrictExtensionIsolation) { $preflightArgs.StrictExtensionIsolation = $true }
+if ($AllowProjectExtensions) { $preflightArgs.AllowProjectExtensions = $true }
+& $Preflight @preflightArgs
 
 $effectiveHome = if ($env:GROK_HOME) { $env:GROK_HOME } else { Join-Path $HOME '.grok' }
 
@@ -160,12 +166,13 @@ Write-Host "Binary integrity: VERIFIED ($actualHash)" -ForegroundColor Green
 Write-Host 'Cloud/session artifact uploads: BLOCKED'
 Write-Host 'Remote session writeback/share backend: BLOCKED'
 Write-Host 'In-app self-update: BLOCKED (sync + rebuild instead)'
-Write-Host 'Product telemetry / internal+external OTLP / feedback: BLOCKED'
-Write-Host ("Claude/Cursor compatibility discovery: {0}" -f $(if ($AllowVendorCompatibility) { 'EXPLICITLY ALLOWED' } else { 'BLOCKED' }))
+Write-Host 'Product telemetry / internal+external OTLP / feedback analytics: BLOCKED'
+Write-Host 'Native MCP/hooks/plugins: UPSTREAM BEHAVIOR RETAINED'
+Write-Host ("Vendor compatibility discovery: {0}" -f $(if ($StrictExtensionIsolation -and -not $AllowVendorCompatibility) { 'BLOCKED FOR THIS STRICT RUN' } else { 'UPSTREAM BEHAVIOR RETAINED' }))
 Write-Host "GROK_HOME: $effectiveHome"
 Write-Host ''
 Write-Host 'Boundary: source text intentionally included in model inference can still leave the machine.' -ForegroundColor Yellow
-Write-Host 'Boundary: explicitly trusted MCP/hooks/plugins/shell/web tools may have their own network access.' -ForegroundColor Yellow
+Write-Host 'Boundary: explicitly configured MCP/hooks/plugins/shell/web tools may have their own network access by design.' -ForegroundColor Yellow
 Write-Host ''
 
 & $Binary @GrokArgs
