@@ -30,9 +30,11 @@ function Test-SecuritySensitivePath([string]$Path) {
         '^crates/codegen/xai-grok-shell/src/upload/',
         '^crates/codegen/xai-grok-shell/src/remote/',
         '^crates/codegen/xai-grok-shell/src/session/storage/',
-        '^crates/codegen/xai-grok-shell/src/agent/init\.rs$',
+        '^crates/codegen/xai-grok-shell/src/session/acp_session\.rs$',
+        '^crates/codegen/xai-grok-shell/src/agent/(init|feedback_client|session_registry_client)\.rs$',
         '^crates/codegen/xai-grok-shell/src/http(\.rs|/)',
         '^crates/codegen/xai-grok-shell/src/extensions/(feedback|share|privacy)\.rs$',
+        '^crates/codegen/xai-grok-memory/',
         '^crates/codegen/xai-grok-update/',
         '^crates/codegen/xai-grok-telemetry/',
         '^prod/mc/cli-chat-proxy-types/',
@@ -43,6 +45,17 @@ function Test-SecuritySensitivePath([string]$Path) {
         if ($p -match $pattern) { return $true }
     }
     return $false
+}
+
+function Restore-PreSyncHead([string]$Commit, [string]$Reason) {
+    Write-Host ''
+    Write-Host "Safety gate failed: $Reason" -ForegroundColor Red
+    Write-Host "Rolling branch back to exact pre-sync commit $Commit ..." -ForegroundColor Yellow
+    & git reset --hard $Commit *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "safety gate failed and automatic rollback also failed; intended rollback commit: $Commit"
+    }
+    Write-Host 'Rollback completed.' -ForegroundColor Green
 }
 
 Push-Location $RepoRoot
@@ -91,8 +104,9 @@ try {
 
     if ($mergeBase -eq $upstream) {
         Write-Host 'No new upstream commits to replay. Running the current audit only.'
+        # audit.ps1 fails by throwing; let that propagate. Do not inspect a stale
+        # $LASTEXITCODE left by a native command that audit may intentionally probe.
         & $AuditScript
-        if ($LASTEXITCODE -ne 0) { throw 'security audit failed' }
         return
     }
 
@@ -108,6 +122,7 @@ try {
         $riskyPaths | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
         Write-Host ''
         & git diff --stat "$mergeBase..$upstream" -- @riskyPaths
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to show security-sensitive upstream diff stat.' }
 
         if (-not $ReviewedRiskyChanges) {
             Write-Host ''
@@ -126,21 +141,23 @@ try {
         if ($LASTEXITCODE -ne 0) {
             Write-Host 'WARNING: git rebase --abort also failed; inspect repository state manually.' -ForegroundColor Red
         }
-        exit 2
+        throw 'upstream rebase failed and was aborted'
     }
 
     $postRebase = (& git rev-parse HEAD).Trim()
     Write-Host "Rebased HEAD:          $postRebase"
     Write-Host 'Running post-sync security audit...'
-    & $AuditScript
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ''
-        Write-Host 'Post-sync audit FAILED. Rolling the branch back to its exact pre-sync commit.' -ForegroundColor Red
-        & git reset --hard $before *> $null
-        if ($LASTEXITCODE -ne 0) {
-            throw "audit failed and automatic rollback failed; intended rollback commit: $before"
-        }
-        throw 'post-sync security audit failed; branch was rolled back and must not be released'
+
+    try {
+        # This is intentionally a PowerShell exception boundary. audit.ps1 uses
+        # `throw`, so checking $LASTEXITCODE after invocation is insufficient and
+        # could skip rollback entirely.
+        & $AuditScript
+    }
+    catch {
+        $auditMessage = $_.Exception.Message
+        Restore-PreSyncHead -Commit $before -Reason "post-sync audit failed: $auditMessage"
+        throw "post-sync security audit failed; branch was rolled back to $before"
     }
 
     $after = (& git rev-parse HEAD).Trim()
