@@ -12,6 +12,7 @@ on:
       - 'crates/codegen/xai-grok-shell/src/remote/**'
       - 'crates/codegen/xai-grok-shell/src/session/storage/**'
       - 'crates/codegen/xai-grok-shell/src/agent/init.rs'
+      - 'crates/codegen/xai-grok-shell/src/agent/feedback_client.rs'
       - 'crates/codegen/xai-grok-shell/src/extensions/feedback.rs'
       - 'crates/codegen/xai-grok-update/**'
       - 'crates/codegen/xai-grok-telemetry/**'
@@ -67,9 +68,13 @@ jobs:
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-shell/src/agent/init.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
 
-      - name: Recount patch check - feedback handler
+      - name: Recount patch check - feedback extension
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-shell/src/extensions/feedback.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+
+      - name: Recount patch check - feedback session analytics client
+        shell: pwsh
+        run: git apply --recount --check -- grok-safe/patches/0002-block-feedback-session-signals.patch
 
       - name: Recount patch check - remote session client
         shell: pwsh
@@ -91,9 +96,15 @@ jobs:
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-update/src/auto_update.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
 
-      - name: Recount full hardening patch applicability
+      - name: Recount ordered patch set applicability
         shell: pwsh
-        run: git apply --recount --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+        run: |
+          $patches = @(Get-ChildItem .\grok-safe\patches\*.patch | Sort-Object Name)
+          if ($patches.Count -eq 0) { throw 'No grok-safe patches found' }
+          foreach ($patch in $patches) {
+            git apply --recount --check -- $patch.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Patch context check failed: $($patch.Name)" }
+          }
 
       - name: Run grok-safe static audit
         shell: pwsh
@@ -128,32 +139,40 @@ jobs:
         shell: pwsh
         run: dotslash --version
 
-      - name: Apply hardening patch
+      - name: Apply ordered hardening patch set
         shell: pwsh
         run: |
-          git apply --recount --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-          git apply --recount -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+          $patches = @(Get-ChildItem .\grok-safe\patches\*.patch | Sort-Object Name)
+          if ($patches.Count -eq 0) { throw 'No grok-safe patches found' }
+          foreach ($patch in $patches) {
+            Write-Host "Applying $($patch.Name)"
+            git apply --recount --check -- $patch.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Patch context check failed: $($patch.Name)" }
+            git apply --recount -- $patch.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Patch apply failed: $($patch.Name)" }
+          }
           git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Patched tree failed git diff --check' }
 
       - name: Compile xai-file-utils hardening
         shell: pwsh
-        run: cargo check -p xai-file-utils
+        run: cargo check -q -p xai-file-utils
 
       - name: Compile xai-grok-telemetry hardening
         shell: pwsh
-        run: cargo check -p xai-grok-telemetry
+        run: cargo check -q -p xai-grok-telemetry
 
       - name: Compile xai-grok-shell hardening
         shell: pwsh
-        run: cargo check -p xai-grok-shell
+        run: cargo check -q -p xai-grok-shell
 
       - name: Compile xai-grok-update hardening
         shell: pwsh
-        run: cargo check -p xai-grok-update
+        run: cargo check -q -p xai-grok-update
 
       - name: Link Windows hardened release
         shell: pwsh
-        run: cargo build -p xai-grok-pager-bin --release
+        run: cargo build -q -p xai-grok-pager-bin --release
 
       - name: Smoke-test produced binary without starting a session
         shell: pwsh
