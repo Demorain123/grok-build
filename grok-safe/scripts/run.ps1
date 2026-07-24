@@ -52,56 +52,21 @@ if (-not $buildInfo.binary_sha256 -or $buildInfo.binary_sha256.ToString().ToLowe
     throw 'BUILD_INFO.json binary_sha256 does not match grok-safe.exe. Refusing to launch.'
 }
 
-# Fail-closed local policy for Grok-owned non-inference egress. These are set
-# explicitly so inherited environment values cannot weaken the reviewed wrapper.
-$env:GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS = '0'
-$env:GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC = '0'
-$env:GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE = '0'
-$env:GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS = '0'
-
-# Keep automatic session persistence local even if xAI remote settings or an
-# existing user config would otherwise select Writeback. Explicit user-initiated
-# remote read/restore/share operations keep their upstream backend behavior.
-$env:GROK_STORAGE_MODE = 'local'
-
-# Disable Grok-owned product telemetry, trace uploads, feedback analytics, and
-# Grok's external OTLP configuration. The Rust patch independently disables both
-# internal and external OTLP exporters. We intentionally do NOT mutate generic
-# OTEL_* environment variables because explicit MCP/hooks/shell child processes
-# may legitimately depend on the user's OpenTelemetry environment.
-$env:GROK_TELEMETRY_ENABLED = 'false'
-$env:GROK_TELEMETRY_TRACE_UPLOAD = 'false'
-$env:GROK_TELEMETRY_MIXPANEL_ENABLED = 'false'
-$env:GROK_FEEDBACK_ENABLED = 'false'
-$env:GROK_EXTERNAL_OTEL = '0'
-
-# Preserve normal Grok extension behavior by default. This includes native MCP
-# and upstream Claude/Cursor compatibility discovery. Users who explicitly want
-# a reduced extension surface for a sensitive run can opt into strict isolation.
-if ($StrictExtensionIsolation -and -not $AllowVendorCompatibility) {
-    foreach ($name in @(
-        'GROK_CLAUDE_SKILLS_ENABLED',
-        'GROK_CLAUDE_RULES_ENABLED',
-        'GROK_CLAUDE_AGENTS_ENABLED',
-        'GROK_CLAUDE_MCPS_ENABLED',
-        'GROK_CLAUDE_HOOKS_ENABLED',
-        'GROK_CLAUDE_SESSIONS_ENABLED',
-        'GROK_CURSOR_SKILLS_ENABLED',
-        'GROK_CURSOR_RULES_ENABLED',
-        'GROK_CURSOR_AGENTS_ENABLED',
-        'GROK_CURSOR_MCPS_ENABLED',
-        'GROK_CURSOR_HOOKS_ENABLED',
-        'GROK_CURSOR_SESSIONS_ENABLED',
-        'GROK_CODEX_SESSIONS_ENABLED'
-    )) {
-        Set-Item -Path "Env:$name" -Value 'false'
-    }
-}
-
-# Remove inherited destinations/credentials for known Grok-owned auxiliary
-# paths only. Do not clear HTTP(S)_PROXY or generic OTEL_* variables: inference,
-# auth and explicitly configured MCP/tools may legitimately use them.
-foreach ($name in @(
+# PowerShell environment mutations are process-global. Snapshot every variable
+# this wrapper may change so -IsolatedHome / strict mode / privacy settings affect
+# only the launched Grok process and do not leak into later commands in the same
+# PowerShell window.
+$ManagedEnvNames = @(
+    'GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS',
+    'GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC',
+    'GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE',
+    'GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS',
+    'GROK_STORAGE_MODE',
+    'GROK_TELEMETRY_ENABLED',
+    'GROK_TELEMETRY_TRACE_UPLOAD',
+    'GROK_TELEMETRY_MIXPANEL_ENABLED',
+    'GROK_FEEDBACK_ENABLED',
+    'GROK_EXTERNAL_OTEL',
     'GROK_INTERNAL_OTLP_TRACES_ENDPOINT',
     'GROK_INTERNAL_OTLP_HEADERS',
     'GROK_TRACE_UPLOAD_URL',
@@ -114,69 +79,182 @@ foreach ($name in @(
     'GROK_TELEMETRY_GCS_BUCKET',
     'GROK_TELEMETRY_EVENTS_URL',
     'GROK_TELEMETRY_EVENTS_API_KEY',
-    'GROK_TELEMETRY_MIXPANEL_TOKEN'
-)) {
-    Remove-Item "Env:$name" -ErrorAction SilentlyContinue
-}
+    'GROK_TELEMETRY_MIXPANEL_TOKEN',
+    'GROK_CLAUDE_SKILLS_ENABLED',
+    'GROK_CLAUDE_RULES_ENABLED',
+    'GROK_CLAUDE_AGENTS_ENABLED',
+    'GROK_CLAUDE_MCPS_ENABLED',
+    'GROK_CLAUDE_HOOKS_ENABLED',
+    'GROK_CLAUDE_SESSIONS_ENABLED',
+    'GROK_CURSOR_SKILLS_ENABLED',
+    'GROK_CURSOR_RULES_ENABLED',
+    'GROK_CURSOR_AGENTS_ENABLED',
+    'GROK_CURSOR_MCPS_ENABLED',
+    'GROK_CURSOR_HOOKS_ENABLED',
+    'GROK_CURSOR_SESSIONS_ENABLED',
+    'GROK_CODEX_SESSIONS_ENABLED',
+    'GROK_HOME'
+)
 
-# Preserve normal user configuration. If the caller already set GROK_HOME,
-# normal mode leaves it alone. Otherwise official Grok defaults to ~/.grok.
-# -UseOfficialHome explicitly forces ~/.grok; -IsolatedHome explicitly uses a
-# separate ~/.grok-safe (or GROK_SAFE_HOME) for unusually sensitive testing.
-if ($IsolatedHome) {
-    if ($env:GROK_SAFE_HOME) {
-        $env:GROK_HOME = $env:GROK_SAFE_HOME
+$OriginalEnvironment = @{}
+foreach ($name in $ManagedEnvNames) {
+    $item = Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+    if ($null -ne $item) {
+        $OriginalEnvironment[$name] = [pscustomobject]@{
+            Exists = $true
+            Value = [string]$item.Value
+        }
     } else {
-        $env:GROK_HOME = Join-Path $HOME '.grok-safe'
+        $OriginalEnvironment[$name] = [pscustomobject]@{
+            Exists = $false
+            Value = $null
+        }
     }
-    New-Item -ItemType Directory -Force -Path $env:GROK_HOME | Out-Null
-} elseif ($UseOfficialHome) {
-    $env:GROK_HOME = Join-Path $HOME '.grok'
-} elseif (-not $env:GROK_HOME) {
-    $env:GROK_HOME = Join-Path $HOME '.grok'
 }
 
-# PowerShell leaves a ValueFromRemainingArguments array as $null when the caller
-# supplies no Grok arguments. Normalize it so strict mode and no-argument TUI
-# launches use the exact same safe path as CLI subcommands.
-$GrokArgs = @($GrokArgs)
-
-# Allow callers to use the common `--` separator without forwarding it to Grok.
-if ($GrokArgs.Count -gt 0 -and $GrokArgs[0] -eq '--') {
-    $GrokArgs = @($GrokArgs | Select-Object -Skip 1)
+function Restore-GrokSafeEnvironment {
+    foreach ($name in $ManagedEnvNames) {
+        $original = $OriginalEnvironment[$name]
+        if ($original.Exists) {
+            Set-Item -Path "Env:$name" -Value $original.Value
+        } else {
+            Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+        }
+    }
 }
 
-# CLI-supplied plugin roots are explicit user intent. Preserve them by default;
-# strict extension isolation can require a second explicit acknowledgement.
-$hasPluginDir = @($GrokArgs | Where-Object { $_ -eq '--plugin-dir' -or $_ -like '--plugin-dir=*' }).Count -gt 0
-if ($hasPluginDir -and $StrictExtensionIsolation -and -not $AllowProjectExtensions) {
-    throw 'Strict extension isolation blocked --plugin-dir. Rerun with -AllowProjectExtensions only after reviewing that plugin source.'
+$childExitCode = 1
+try {
+    # Fail-closed local policy for Grok-owned non-inference egress. These are set
+    # explicitly so inherited environment values cannot weaken the reviewed wrapper.
+    $env:GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS = '0'
+    $env:GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC = '0'
+    $env:GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE = '0'
+    $env:GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS = '0'
+
+    # Keep automatic session persistence local even if xAI remote settings or an
+    # existing user config would otherwise select Writeback. Explicit user-initiated
+    # remote read/restore/share operations keep their upstream backend behavior.
+    $env:GROK_STORAGE_MODE = 'local'
+
+    # Disable Grok-owned product telemetry, trace uploads, feedback analytics, and
+    # Grok's external OTLP configuration. The Rust patch independently disables both
+    # internal and external OTLP exporters. We intentionally do NOT mutate generic
+    # OTEL_* environment variables because explicit MCP/hooks/shell child processes
+    # may legitimately depend on the user's OpenTelemetry environment.
+    $env:GROK_TELEMETRY_ENABLED = 'false'
+    $env:GROK_TELEMETRY_TRACE_UPLOAD = 'false'
+    $env:GROK_TELEMETRY_MIXPANEL_ENABLED = 'false'
+    $env:GROK_FEEDBACK_ENABLED = 'false'
+    $env:GROK_EXTERNAL_OTEL = '0'
+
+    # Preserve normal Grok extension behavior by default. This includes native MCP
+    # and upstream Claude/Cursor compatibility discovery. Users who explicitly want
+    # a reduced extension surface for a sensitive run can opt into strict isolation.
+    if ($StrictExtensionIsolation -and -not $AllowVendorCompatibility) {
+        foreach ($name in @(
+            'GROK_CLAUDE_SKILLS_ENABLED',
+            'GROK_CLAUDE_RULES_ENABLED',
+            'GROK_CLAUDE_AGENTS_ENABLED',
+            'GROK_CLAUDE_MCPS_ENABLED',
+            'GROK_CLAUDE_HOOKS_ENABLED',
+            'GROK_CLAUDE_SESSIONS_ENABLED',
+            'GROK_CURSOR_SKILLS_ENABLED',
+            'GROK_CURSOR_RULES_ENABLED',
+            'GROK_CURSOR_AGENTS_ENABLED',
+            'GROK_CURSOR_MCPS_ENABLED',
+            'GROK_CURSOR_HOOKS_ENABLED',
+            'GROK_CURSOR_SESSIONS_ENABLED',
+            'GROK_CODEX_SESSIONS_ENABLED'
+        )) {
+            Set-Item -Path "Env:$name" -Value 'false'
+        }
+    }
+
+    # Remove inherited destinations/credentials for known Grok-owned auxiliary
+    # paths only. Do not clear HTTP(S)_PROXY or generic OTEL_* variables: inference,
+    # auth and explicitly configured MCP/tools may legitimately use them.
+    foreach ($name in @(
+        'GROK_INTERNAL_OTLP_TRACES_ENDPOINT',
+        'GROK_INTERNAL_OTLP_HEADERS',
+        'GROK_TRACE_UPLOAD_URL',
+        'GROK_TRACE_UPLOAD_BUCKET',
+        'GROK_TRACE_UPLOAD_REGION',
+        'GROK_TRACE_UPLOAD_CREDENTIALS_FILE',
+        'GROK_TRACE_UPLOAD_CREDENTIALS',
+        'GROK_TRACE_UPLOAD_ENDPOINT_URL',
+        'GROK_FEEDBACK_BASE_URL',
+        'GROK_TELEMETRY_GCS_BUCKET',
+        'GROK_TELEMETRY_EVENTS_URL',
+        'GROK_TELEMETRY_EVENTS_API_KEY',
+        'GROK_TELEMETRY_MIXPANEL_TOKEN'
+    )) {
+        Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+    }
+
+    # Preserve normal user configuration. If the caller already set GROK_HOME,
+    # normal mode leaves it alone. Otherwise official Grok defaults to ~/.grok.
+    # -UseOfficialHome explicitly forces ~/.grok; -IsolatedHome explicitly uses a
+    # separate ~/.grok-safe (or GROK_SAFE_HOME) for unusually sensitive testing.
+    if ($IsolatedHome) {
+        if ($env:GROK_SAFE_HOME) {
+            $env:GROK_HOME = $env:GROK_SAFE_HOME
+        } else {
+            $env:GROK_HOME = Join-Path $HOME '.grok-safe'
+        }
+        New-Item -ItemType Directory -Force -Path $env:GROK_HOME | Out-Null
+    } elseif ($UseOfficialHome) {
+        $env:GROK_HOME = Join-Path $HOME '.grok'
+    } elseif (-not $env:GROK_HOME) {
+        $env:GROK_HOME = Join-Path $HOME '.grok'
+    }
+
+    # PowerShell leaves a ValueFromRemainingArguments array as $null when the caller
+    # supplies no Grok arguments. Normalize it so strict mode and no-argument TUI
+    # launches use the exact same safe path as CLI subcommands.
+    $GrokArgs = @($GrokArgs)
+
+    # Allow callers to use the common `--` separator without forwarding it to Grok.
+    if ($GrokArgs.Count -gt 0 -and $GrokArgs[0] -eq '--') {
+        $GrokArgs = @($GrokArgs | Select-Object -Skip 1)
+    }
+
+    # CLI-supplied plugin roots are explicit user intent. Preserve them by default;
+    # strict extension isolation can require a second explicit acknowledgement.
+    $hasPluginDir = @($GrokArgs | Where-Object { $_ -eq '--plugin-dir' -or $_ -like '--plugin-dir=*' }).Count -gt 0
+    if ($hasPluginDir -and $StrictExtensionIsolation -and -not $AllowProjectExtensions) {
+        throw 'Strict extension isolation blocked --plugin-dir. Rerun with -AllowProjectExtensions only after reviewing that plugin source.'
+    }
+
+    Write-Host 'Running project extension preflight...'
+    $preflightArgs = @{
+        ProjectPath = (Get-Location).Path
+    }
+    if ($StrictExtensionIsolation) { $preflightArgs['StrictExtensionIsolation'] = $true }
+    if ($AllowProjectExtensions) { $preflightArgs['AllowProjectExtensions'] = $true }
+    & $Preflight @preflightArgs
+
+    $effectiveHome = $env:GROK_HOME
+
+    Write-Host ''
+    Write-Host 'grok-safe privacy guard: ON' -ForegroundColor Green
+    Write-Host "Binary integrity: VERIFIED ($actualHash)" -ForegroundColor Green
+    Write-Host 'Cloud/session artifact uploads: BLOCKED'
+    Write-Host 'Automatic remote session writeback: BLOCKED; explicit remote read/share retained'
+    Write-Host 'In-app self-update: BLOCKED (sync + rebuild instead)'
+    Write-Host 'Product telemetry / Grok OTLP / feedback analytics: BLOCKED'
+    Write-Host 'Native MCP/hooks/plugins: UPSTREAM BEHAVIOR RETAINED'
+    Write-Host ("Vendor compatibility discovery: {0}" -f $(if ($StrictExtensionIsolation -and -not $AllowVendorCompatibility) { 'BLOCKED FOR THIS STRICT RUN' } else { 'UPSTREAM BEHAVIOR RETAINED' }))
+    Write-Host "GROK_HOME: $effectiveHome"
+    Write-Host ''
+    Write-Host 'Boundary: source text intentionally included in model inference can still leave the machine.' -ForegroundColor Yellow
+    Write-Host 'Boundary: explicitly configured MCP/hooks/plugins/shell/web/share tools may have their own network access by design.' -ForegroundColor Yellow
+    Write-Host ''
+
+    & $Binary @GrokArgs
+    $childExitCode = $LASTEXITCODE
+} finally {
+    Restore-GrokSafeEnvironment
 }
 
-Write-Host 'Running project extension preflight...'
-$preflightArgs = @{
-    ProjectPath = (Get-Location).Path
-}
-if ($StrictExtensionIsolation) { $preflightArgs['StrictExtensionIsolation'] = $true }
-if ($AllowProjectExtensions) { $preflightArgs['AllowProjectExtensions'] = $true }
-& $Preflight @preflightArgs
-
-$effectiveHome = $env:GROK_HOME
-
-Write-Host ''
-Write-Host 'grok-safe privacy guard: ON' -ForegroundColor Green
-Write-Host "Binary integrity: VERIFIED ($actualHash)" -ForegroundColor Green
-Write-Host 'Cloud/session artifact uploads: BLOCKED'
-Write-Host 'Automatic remote session writeback: BLOCKED; explicit remote read/share retained'
-Write-Host 'In-app self-update: BLOCKED (sync + rebuild instead)'
-Write-Host 'Product telemetry / Grok OTLP / feedback analytics: BLOCKED'
-Write-Host 'Native MCP/hooks/plugins: UPSTREAM BEHAVIOR RETAINED'
-Write-Host ("Vendor compatibility discovery: {0}" -f $(if ($StrictExtensionIsolation -and -not $AllowVendorCompatibility) { 'BLOCKED FOR THIS STRICT RUN' } else { 'UPSTREAM BEHAVIOR RETAINED' }))
-Write-Host "GROK_HOME: $effectiveHome"
-Write-Host ''
-Write-Host 'Boundary: source text intentionally included in model inference can still leave the machine.' -ForegroundColor Yellow
-Write-Host 'Boundary: explicitly configured MCP/hooks/plugins/shell/web/share tools may have their own network access by design.' -ForegroundColor Yellow
-Write-Host ''
-
-& $Binary @GrokArgs
-exit $LASTEXITCODE
+exit $childExitCode
