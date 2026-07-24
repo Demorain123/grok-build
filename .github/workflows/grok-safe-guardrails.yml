@@ -12,6 +12,7 @@ on:
       - 'crates/codegen/xai-grok-shell/src/remote/**'
       - 'crates/codegen/xai-grok-shell/src/session/storage/**'
       - 'crates/codegen/xai-grok-shell/src/agent/init.rs'
+      - 'crates/codegen/xai-grok-shell/src/extensions/feedback.rs'
       - 'crates/codegen/xai-grok-update/**'
       - 'crates/codegen/xai-grok-telemetry/**'
       - 'prod/mc/cli-chat-proxy-types/**'
@@ -34,7 +35,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout exact safety commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -53,7 +54,7 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - name: Checkout exact safety commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -65,13 +66,12 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install DotSlash when missing
+      - name: Install pinned DotSlash action
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - name: Verify DotSlash
         shell: pwsh
-        run: |
-          if (-not (Get-Command dotslash -ErrorAction SilentlyContinue)) {
-            cargo install dotslash --locked
-          }
-          dotslash --version
+        run: dotslash --version
 
       - name: Apply hardening patch
         shell: pwsh
@@ -82,7 +82,7 @@ jobs:
 
       - name: Compile every patched crate
         shell: pwsh
-        run: cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update
+        run: cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update -p xai-grok-telemetry
 
       - name: Link Windows hardened release
         shell: pwsh
