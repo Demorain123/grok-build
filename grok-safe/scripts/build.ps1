@@ -8,6 +8,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SafeRoot = Resolve-Path (Join-Path $ScriptDir '..')
 $RepoRoot = Resolve-Path (Join-Path $SafeRoot '..')
 $AuditScript = Join-Path $ScriptDir 'audit.ps1'
+$EgressAuditScript = Join-Path $ScriptDir 'audit-egress-boundaries.ps1'
 $PatchDir = Join-Path $SafeRoot 'patches'
 $DistDir = Join-Path $SafeRoot 'dist'
 $CacheDir = Join-Path $SafeRoot '.cache'
@@ -19,7 +20,11 @@ foreach ($cmd in @('git', 'cargo', 'rustc', 'dotslash')) {
     }
 }
 
-if (-not (Test-Path $AuditScript)) { throw "Audit script not found: $AuditScript" }
+foreach ($audit in @($AuditScript, $EgressAuditScript)) {
+    if (-not (Test-Path -LiteralPath $audit -PathType Leaf)) {
+        throw "Audit script not found: $audit"
+    }
+}
 $PatchFiles = @(
     Get-ChildItem -LiteralPath $PatchDir -File -Filter '*.patch' -ErrorAction Stop |
         Sort-Object Name
@@ -41,10 +46,9 @@ try {
         throw "Refusing hardened build from branch '$sourceBranch'. Use a privacy-hardening-* branch."
     }
 
-    Write-Host 'Running mandatory static security audit...'
-    # PowerShell-script failures propagate via throw; do not inspect a stale native
-    # $LASTEXITCODE after invoking the audit script.
+    Write-Host 'Running mandatory static security audits...'
     & $AuditScript
+    & $EgressAuditScript
 
     $patchHashes = [ordered]@{}
     foreach ($patch in $PatchFiles) {
@@ -82,7 +86,6 @@ try {
         & git -C $Worktree diff --check
         if ($LASTEXITCODE -ne 0) { throw 'patched tree failed git diff --check' }
 
-        # Verify the patched tree itself, not merely the patch text.
         $patchedAssertions = @(
             @{ Path='crates\codegen\xai-file-utils\src\gcs.rs'; Needle='grok_safe_block_cloud_storage_upload' },
             @{ Path='crates\codegen\xai-file-utils\src\storage_client.rs'; Needle='grok-safe-storage-blocked' },
@@ -117,11 +120,6 @@ try {
                 & cargo check -p xai-file-utils
                 if ($LASTEXITCODE -ne 0) { throw 'xai-file-utils hardening cargo check failed' }
 
-                # These standalone crate checks are useful diagnostics, but upstream has
-                # shown Windows-only independent-crate failures that do not necessarily
-                # reflect the production pager dependency graph. The shell and final
-                # release link below remain hard gates and will fail if these crates are
-                # actually unusable in the production binary.
                 Write-Host 'Diagnostic: checking xai-grok-memory standalone crate...'
                 & cargo check -p xai-grok-memory
                 if ($LASTEXITCODE -ne 0) {
