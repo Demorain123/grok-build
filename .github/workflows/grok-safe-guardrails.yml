@@ -1,0 +1,93 @@
+name: Grok Safe Guardrails
+
+on:
+  push:
+    branches:
+      - 'privacy-hardening-**'
+  pull_request:
+    paths:
+      - 'grok-safe/**'
+      - 'crates/codegen/xai-file-utils/**'
+      - 'crates/codegen/xai-grok-shell/src/upload/**'
+      - 'crates/codegen/xai-grok-shell/src/remote/**'
+      - 'crates/codegen/xai-grok-shell/src/session/storage/**'
+      - 'crates/codegen/xai-grok-shell/src/agent/init.rs'
+      - 'crates/codegen/xai-grok-update/**'
+      - 'crates/codegen/xai-grok-telemetry/**'
+      - 'prod/mc/cli-chat-proxy-types/**'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/grok-safe-guardrails.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grok-safe-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-audit:
+    name: Static fail-closed audit
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact safety commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run grok-safe static audit
+        shell: pwsh
+        run: .\grok-safe\scripts\audit.ps1
+
+  hardened-compile:
+    name: Apply patch and compile hardened crates
+    needs: static-audit
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout exact safety commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup show
+          rustc --version
+          cargo --version
+
+      - name: Install DotSlash when missing
+        shell: pwsh
+        run: |
+          if (-not (Get-Command dotslash -ErrorAction SilentlyContinue)) {
+            cargo install dotslash --locked
+          }
+          dotslash --version
+
+      - name: Apply hardening patch
+        shell: pwsh
+        run: |
+          git apply --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+          git apply -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
+          git diff --check
+
+      - name: Compile every patched crate
+        shell: pwsh
+        run: cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update
+
+      - name: Link Windows hardened release
+        shell: pwsh
+        run: cargo build -p xai-grok-pager-bin --release
+
+      - name: Smoke-test produced binary without starting a session
+        shell: pwsh
+        run: .\target\release\xai-grok-pager.exe version
