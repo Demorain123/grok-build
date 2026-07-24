@@ -28,6 +28,8 @@ function Test-SecuritySensitivePath([string]$Path) {
     $p = Normalize-RepoPath $Path
     $patterns = @(
         '^crates/codegen/xai-file-utils/',
+        '^crates/build/xai-proto-build/',
+        '^bin/protoc$',
         '^crates/codegen/xai-grok-shell/src/upload/',
         '^crates/codegen/xai-grok-shell/src/remote/',
         '^crates/codegen/xai-grok-shell/src/session/storage/',
@@ -133,9 +135,9 @@ try {
     $riskyPaths = @($changedPaths | Where-Object { Test-SecuritySensitivePath $_ })
 
     Write-Host ''
-    Write-Host ("Upstream changed {0} path(s); {1} security-sensitive." -f $changedPaths.Count, $riskyPaths.Count)
+    Write-Host ("Upstream changed {0} path(s); {1} security-sensitive/build-critical." -f $changedPaths.Count, $riskyPaths.Count)
     if ($riskyPaths.Count -gt 0) {
-        Write-Host 'Security-sensitive upstream changes:' -ForegroundColor Yellow
+        Write-Host 'Security-sensitive/build-critical upstream changes:' -ForegroundColor Yellow
         $riskyPaths | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
         Write-Host ''
         & git diff --stat "$mergeBase..$upstream" -- @riskyPaths
