@@ -1,0 +1,45 @@
+diff --git a/crates/codegen/xai-grok-shell/src/agent/feedback_client.rs b/crates/codegen/xai-grok-shell/src/agent/feedback_client.rs
+--- a/crates/codegen/xai-grok-shell/src/agent/feedback_client.rs
++++ b/crates/codegen/xai-grok-shell/src/agent/feedback_client.rs
+@@ -22,6 +22,17 @@ use prod_mc_cli_chat_proxy_types::feedback_types::{
+ 
+ /// Client version header sent on every request to cli-chat-proxy for version gating.
+ const CLIENT_VERSION_HEADER: &str = "x-grok-client-version";
++
++const GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS";
++
++fn grok_safe_aux_egress_allowed() -> bool {
++    cfg!(test)
++        || matches!(
++            std::env::var(GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS).as_deref(),
++            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++        )
++}
+ 
+ // ============================================================================
+ // Turn delta wire types (local to xai-grok-shell until cli-chat-proxy catches up)
+@@ -515,6 +526,12 @@ impl FeedbackClient {
+         request: RequestBuilder,
+         context: &'static str,
+     ) -> Result<T> {
++        if !grok_safe_aux_egress_allowed() {
++            anyhow::bail!(
++                "grok-safe: blocked feedback/session-signals auxiliary request ({context})"
++            );
++        }
+         let request = xai_file_utils::trace_context::inject_trace_context_into_request(request);
+         let req = request.build().context(context)?;
+         let response = self.client.execute(req).await.context(context)?;
+@@ -551,6 +568,12 @@ impl FeedbackClient {
+     }
+ 
+     async fn send_empty(&self, request: RequestBuilder, context: &'static str) -> Result<()> {
++        if !grok_safe_aux_egress_allowed() {
++            anyhow::bail!(
++                "grok-safe: blocked feedback/session-signals auxiliary request ({context})"
++            );
++        }
+         let request = xai_file_utils::trace_context::inject_trace_context_into_request(request);
+         let req = request.build().context(context)?;
+         let response = self.client.execute(req).await.context(context)?;
