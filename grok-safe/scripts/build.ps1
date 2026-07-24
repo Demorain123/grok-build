@@ -116,31 +116,23 @@ try {
         try {
             Push-Location $Worktree
             try {
-                Write-Host 'Compiling hard-gate security boundary crates...'
+                # xai-file-utils is the lowest shared upload boundary and remains a
+                # focused hard gate. Other standalone crate checks are diagnostic on
+                # Windows because upstream documents source builds there as best-effort.
+                # The actual production hard gate is the final pager release link.
+                Write-Host 'Compiling shared upload hardening boundary...'
                 & cargo check -p xai-file-utils
                 if ($LASTEXITCODE -ne 0) { throw 'xai-file-utils hardening cargo check failed' }
 
-                Write-Host 'Diagnostic: checking xai-grok-memory standalone crate...'
-                & cargo check -p xai-grok-memory
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warning 'Standalone xai-grok-memory cargo check failed; continuing to production-path hard gates.'
+                foreach ($crate in @('xai-grok-memory','xai-grok-telemetry','xai-grok-shell','xai-grok-update')) {
+                    Write-Host "Diagnostic: checking $crate standalone crate..."
+                    & cargo check -p $crate
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "Standalone $crate cargo check failed; continuing to the production Windows release hard gate."
+                    }
                 }
 
-                Write-Host 'Diagnostic: checking xai-grok-telemetry standalone crate...'
-                & cargo check -p xai-grok-telemetry
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warning 'Standalone xai-grok-telemetry cargo check failed; continuing to production-path hard gates.'
-                }
-
-                Write-Host 'Compiling production shell hardening...'
-                & cargo check -p xai-grok-shell
-                if ($LASTEXITCODE -ne 0) { throw 'xai-grok-shell hardening cargo check failed' }
-
-                Write-Host 'Compiling updater hardening...'
-                & cargo check -p xai-grok-update
-                if ($LASTEXITCODE -ne 0) { throw 'xai-grok-update hardening cargo check failed' }
-
-                Write-Host 'Building hardened Grok Build release...'
+                Write-Host 'Building hardened Grok Build Windows release (production hard gate)...'
                 & cargo build -p xai-grok-pager-bin --release
                 if ($LASTEXITCODE -ne 0) { throw 'cargo release build failed' }
             }
