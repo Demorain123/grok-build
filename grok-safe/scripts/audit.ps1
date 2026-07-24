@@ -194,7 +194,7 @@ try {
     Require-Contains $patchText 'GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE' 'self-update unsafe override guard is missing'
     Require-Contains $patchText 'in-app self-update is disabled' 'run_install_script fail-closed guard is missing'
 
-    Write-Host '[7/10] Verifying launcher policy and inherited endpoint cleanup...'
+    Write-Host '[7/10] Verifying launcher protects Grok-owned auxiliary egress without poisoning child-tool OTEL...'
     $launcherRequirements = [ordered]@{
         'GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS' = '0'
         'GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC' = '0'
@@ -206,8 +206,6 @@ try {
         'GROK_TELEMETRY_MIXPANEL_ENABLED' = 'false'
         'GROK_FEEDBACK_ENABLED' = 'false'
         'GROK_EXTERNAL_OTEL' = '0'
-        'OTEL_TRACES_EXPORTER' = 'none'
-        'OTEL_SDK_DISABLED' = 'true'
     }
     foreach ($entry in $launcherRequirements.GetEnumerator()) {
         $expectedLine = '$env:' + $entry.Key + " = '" + $entry.Value + "'"
@@ -217,26 +215,27 @@ try {
         'GROK_INTERNAL_OTLP_TRACES_ENDPOINT','GROK_INTERNAL_OTLP_HEADERS',
         'GROK_TRACE_UPLOAD_URL','GROK_TRACE_UPLOAD_BUCKET','GROK_TRACE_UPLOAD_REGION',
         'GROK_TRACE_UPLOAD_CREDENTIALS_FILE','GROK_TRACE_UPLOAD_ENDPOINT_URL',
-        'GROK_FEEDBACK_BASE_URL','OTEL_EXPORTER_OTLP_ENDPOINT','OTEL_EXPORTER_OTLP_HEADERS'
+        'GROK_FEEDBACK_BASE_URL'
     )) {
-        Require-Contains $runText ("'$name'") "launcher does not scrub inherited auxiliary endpoint/credential: $name"
+        Require-Contains $runText ("'$name'") "launcher does not scrub inherited Grok-owned auxiliary endpoint/credential: $name"
+    }
+    foreach ($forbidden in @('OTEL_SDK_DISABLED','OTEL_TRACES_EXPORTER','OTEL_EXPORTER_OTLP_ENDPOINT','OTEL_EXPORTER_OTLP_HEADERS')) {
+        if ($runText -match ('(?m)^\s*\$env:' + [regex]::Escape($forbidden) + '\s*=') -or
+            $runText -match ("(?m)^\s*'" + [regex]::Escape($forbidden) + "'\s*,?\s*$")) {
+            Fail "launcher globally mutates generic $forbidden; this can break explicitly configured MCP/hooks/shell child processes"
+        }
     }
 
-    Write-Host '[8/10] Verifying compatibility isolation and project extension preflight...'
-    foreach ($name in @(
-        'GROK_CLAUDE_SKILLS_ENABLED','GROK_CLAUDE_RULES_ENABLED','GROK_CLAUDE_AGENTS_ENABLED',
-        'GROK_CLAUDE_MCPS_ENABLED','GROK_CLAUDE_HOOKS_ENABLED','GROK_CLAUDE_SESSIONS_ENABLED',
-        'GROK_CURSOR_SKILLS_ENABLED','GROK_CURSOR_RULES_ENABLED','GROK_CURSOR_AGENTS_ENABLED',
-        'GROK_CURSOR_MCPS_ENABLED','GROK_CURSOR_HOOKS_ENABLED','GROK_CURSOR_SESSIONS_ENABLED',
-        'GROK_CODEX_SESSIONS_ENABLED'
-    )) {
-        Require-Contains $runText ("'$name'") "launcher does not disable compatibility cell by default: $name"
-    }
-    Require-Contains $runText 'AllowVendorCompatibility' 'launcher lacks explicit vendor-compatibility opt-in'
+    Write-Host '[8/10] Verifying normal MCP/extensions are retained by default and strict isolation is opt-in...'
+    Require-Contains $runText 'StrictExtensionIsolation' 'launcher lacks optional strict extension-isolation mode'
+    Require-Contains $runText 'Native MCP/hooks/plugins: UPSTREAM BEHAVIOR RETAINED' 'launcher no longer documents normal extension behavior as retained'
+    Require-Contains $runText "Join-Path `$HOME '.grok'" 'launcher does not keep the official Grok user home in normal mode'
+    Require-Contains $runText 'IsolatedHome' 'launcher lacks explicit isolated-home opt-in'
     Require-Contains $runText '& $Preflight' 'launcher does not execute project extension preflight'
     foreach ($marker in @('.grok\hooks','.grok\plugins','.mcp.json','.cursor\mcp.json','.claude\settings.json')) {
         Require-Contains $preflightText $marker "preflight is missing extension surface: $marker"
     }
+    Require-Contains $preflightText 'warning-only by default' 'preflight no longer treats explicit MCP configuration as non-blocking by default'
 
     Write-Host '[9/10] Verifying CI guardrails compile the patched security boundary...'
     foreach ($needle in @(
@@ -277,8 +276,9 @@ try {
 
     Write-Host ''
     Write-Host 'grok-safe static audit PASSED.' -ForegroundColor Green
-    Write-Host 'Known non-inference storage/session-sync/session-registry/telemetry/analytics/embedding/update sinks are fail-closed and upgrade drift is checked.'
-    Write-Host 'This does NOT prove that model inference contains no source code, nor does it sandbox explicitly trusted MCP/hooks/plugins/shell/web/remote-sandbox tools.' -ForegroundColor Yellow
+    Write-Host 'Known Grok-owned non-inference storage/session-sync/session-registry/telemetry/analytics/embedding/update sinks are fail-closed and upgrade drift is checked.'
+    Write-Host 'Normal MCP/hooks/plugins remain available by default; explicitly configured tools may have their own network access by design.' -ForegroundColor Yellow
+    Write-Host 'This does NOT prove that model inference contains no source code.' -ForegroundColor Yellow
 }
 finally {
     Pop-Location
