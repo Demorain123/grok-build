@@ -1,0 +1,107 @@
+diff --git a/crates/codegen/xai-file-utils/src/gcs.rs b/crates/codegen/xai-file-utils/src/gcs.rs
+--- a/crates/codegen/xai-file-utils/src/gcs.rs
++++ b/crates/codegen/xai-file-utils/src/gcs.rs
+@@ -16,6 +16,29 @@ use xai_grok_auth::{AuthCredentialProvider, StaticAuthCredentialProvider};
+ 
+ use crate::storage_client::{Auth401AttributionCallback, StaticGrokAuth, StorageClient};
+ 
++const GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS";
++
++fn grok_safe_storage_uploads_allowed() -> bool {
++    matches!(
++        std::env::var(GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS).as_deref(),
++        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++    )
++}
++
++fn grok_safe_block_cloud_storage_upload(operation: &str) -> anyhow::Result<()> {
++    if grok_safe_storage_uploads_allowed() {
++        return Ok(());
++    }
++
++    anyhow::bail!(
++        "grok-safe: blocked cloud-storage upload attempt ({operation}); \
++         GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS=1 is required to re-enable upstream upload behavior"
++    )
++}
++
+ /// Threshold for switching to multipart upload (50 MB).
+ ///
+ /// Files larger than this use `StorageClient::upload_multipart()` (signed URLs,
+@@ -106,6 +129,7 @@ pub async fn upload_bytes<C: StorageConfig>(
+     content: &[u8],
+     content_type: &str,
+ ) -> anyhow::Result<String> {
++    grok_safe_block_cloud_storage_upload("upload_bytes")?;
+     match config.upload_method() {
+         UploadMethod::Direct {
+             service_account_key,
+@@ -197,6 +221,7 @@ pub async fn upload_bytes_signed<C: StorageConfig>(
+     content: &[u8],
+     content_type: &str,
+ ) -> anyhow::Result<String> {
++    grok_safe_block_cloud_storage_upload("upload_bytes_signed")?;
+     match config.upload_method() {
+         UploadMethod::Direct { .. } => {
+             // Direct mode already bypasses the proxy — reuse the existing path.
+@@ -245,6 +270,7 @@ pub async fn upload_file<C: StorageConfig>(
+     file_path: &Path,
+     content_type: &str,
+ ) -> anyhow::Result<String> {
++    grok_safe_block_cloud_storage_upload("upload_file")?;
+     match config.upload_method() {
+         UploadMethod::Direct {
+             service_account_key,
+@@ -324,6 +350,7 @@ pub async fn upload_stream<C: StorageConfig, R>(
+ where
+     R: tokio::io::AsyncRead + Send + Sync + 'static,
+ {
++    grok_safe_block_cloud_storage_upload("upload_stream")?;
+     match config.upload_method() {
+         UploadMethod::Direct {
+             service_account_key,
+diff --git a/crates/codegen/xai-file-utils/src/storage_client.rs b/crates/codegen/xai-file-utils/src/storage_client.rs
+--- a/crates/codegen/xai-file-utils/src/storage_client.rs
++++ b/crates/codegen/xai-file-utils/src/storage_client.rs
+@@ -44,6 +44,18 @@ use crate::circuit_breaker_observer::TracingObserver;
+ 
+ const STORAGE_BREAKER_NAME: &str = "storage_breaker";
+ 
++const GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS";
++
++fn grok_safe_storage_uploads_allowed() -> bool {
++    matches!(
++        std::env::var(GROK_SAFE_UNSAFE_ALLOW_STORAGE_UPLOADS).as_deref(),
++        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++    )
++}
++
+ fn storage_breaker_config() -> BreakerConfig {
+     BreakerConfig::client()
+ }
+@@ -216,13 +228,21 @@ impl StorageClient {
+         http_client: Client,
+         credentials: Arc<dyn AuthCredentialProvider>,
+     ) -> Self {
++        // Defense in depth for callers that instantiate StorageClient directly.
++        // The normal high-level GCS/S3 upload entry points are already blocked in
++        // gcs.rs. Redirecting the storage proxy to loopback prevents a future or
++        // overlooked direct StorageClient caller from reaching /v1/storage.
++        let effective_proxy_base_url = if grok_safe_storage_uploads_allowed() {
++            proxy_base_url.to_owned()
++        } else {
++            "http://127.0.0.1:9/grok-safe-storage-blocked".to_owned()
++        };
+         let middleware_client = crate::with_auth_retry(http_client.clone(), credentials.clone());
+         let breaker = CircuitBreaker::new(storage_breaker_config())
+             .with_observer(TracingObserver::new(STORAGE_BREAKER_NAME));
+         Self {
+             http_client: middleware_client,
+             raw_http_client: http_client,
+-            base_url: proxy_base_url.to_owned(),
++            base_url: effective_proxy_base_url,
+             retry_config: RetryConfig::default(),
+             attribution: None,
+             credentials,
