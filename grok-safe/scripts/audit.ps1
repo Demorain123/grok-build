@@ -48,10 +48,14 @@ try {
     )
     if ($rustPaths.Count -eq 0) { Fail 'no Rust source files found under crates/' }
 
-    Write-Host '[1/10] Checking hardening patch applies cleanly...'
-    & git apply --check -- $PatchPath
+    Write-Host '[1/10] Checking hardening patch contexts apply cleanly...'
+    # The patch is intentionally hand-maintained as a tiny replay layer. --recount
+    # derives hunk lengths from the actual +/-/context lines while still requiring
+    # those contexts to match the upstream source. This avoids bookkeeping-only
+    # failures without masking real upstream code drift.
+    & git apply --recount --check -- $PatchPath
     if ($LASTEXITCODE -ne 0) {
-        Fail 'hardening patch no longer applies cleanly; upstream security-sensitive code changed and needs review'
+        Fail 'hardening patch contexts no longer apply cleanly; upstream security-sensitive code changed and needs review'
     }
 
     Write-Host '[2/10] Checking shared cloud-upload API surface...'
@@ -193,7 +197,7 @@ try {
     Write-Host '[9/10] Verifying CI guardrails compile the patched security boundary...'
     foreach ($needle in @(
         '.\grok-safe\scripts\audit.ps1',
-        'git apply --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch',
+        'git apply --recount --check -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch',
         'cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update -p xai-grok-telemetry',
         'cargo build -p xai-grok-pager-bin --release'
     )) {
