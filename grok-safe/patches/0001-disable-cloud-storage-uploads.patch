@@ -132,7 +132,7 @@ diff --git a/crates/codegen/xai-grok-shell/src/agent/init.rs b/crates/codegen/xa
 +    if !grok_safe_remote_sync_allowed() && cfg.storage_mode != StorageMode::Local {
 +        tracing::info!(
 +            previous = ?cfg.storage_mode,
-+            "grok-safe: forcing local session storage; remote writeback/share sync is disabled"
++            "grok-safe: forcing local session storage; background remote writeback sync is disabled"
 +        );
 +        cfg.storage_mode = StorageMode::Local;
 +    }
@@ -172,60 +172,6 @@ diff --git a/crates/codegen/xai-grok-shell/src/extensions/feedback.rs b/crates/c
      if !agent.cfg.borrow().is_feedback_enabled() {
          return Err(acp::Error::internal_error().data(
              "Feedback is disabled. To enable, set GROK_FEEDBACK_ENABLED=true or \
-diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen/xai-grok-shell/src/remote/client.rs
---- a/crates/codegen/xai-grok-shell/src/remote/client.rs
-+++ b/crates/codegen/xai-grok-shell/src/remote/client.rs
-@@ -8,8 +8,28 @@ use prod_mc_cli_chat_proxy_types::SubagentBundle;
- use serde::{Deserialize, Serialize};
- use std::time::Duration;
- const GROK_CODE_BACKEND_URL: &str = "https://code.grok.com";
-+const GROK_SAFE_BLOCKED_CODE_BACKEND_URL: &str =
-+    "http://127.0.0.1:9/grok-safe-remote-sync-blocked";
-+const GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC: &str =
-+    "GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC";
- const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
- const GROK_CODE_WEB_URL: &str = "https://grok.com";
-+
-+fn grok_safe_remote_sync_allowed() -> bool {
-+    matches!(
-+        std::env::var(GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC).as_deref(),
-+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
-+    )
-+}
-+
-+fn grok_safe_code_backend_url(candidate: String) -> String {
-+    if grok_safe_remote_sync_allowed() {
-+        candidate
-+    } else {
-+        GROK_SAFE_BLOCKED_CODE_BACKEND_URL.to_owned()
-+    }
-+}
-+
- /// Build a share URL from a permission ID
- pub fn share_url(permission_id: &str) -> String {
-     let web_url =
-@@ -303,8 +323,10 @@ impl BackendClient {
-         Self {
-             client: reqwest_middleware::ClientBuilder::new(reqwest_client.clone()).build(),
-             reqwest_client,
--            base_url: std::env::var("GROK_CODE_BACKEND_URL")
--                .unwrap_or_else(|_| GROK_CODE_BACKEND_URL.to_string()),
-+            base_url: grok_safe_code_backend_url(
-+                std::env::var("GROK_CODE_BACKEND_URL")
-+                    .unwrap_or_else(|_| GROK_CODE_BACKEND_URL.to_string()),
-+            ),
-             auth_manager: None,
-         }
-     }
-@@ -313,7 +335,7 @@ impl BackendClient {
-         Self {
-             client: reqwest_middleware::ClientBuilder::new(reqwest_client.clone()).build(),
-             reqwest_client,
--            base_url: base_url.into(),
-+            base_url: grok_safe_code_backend_url(base_url.into()),
-             auth_manager: None,
-         }
-     }
 diff --git a/crates/codegen/xai-grok-telemetry/src/client.rs b/crates/codegen/xai-grok-telemetry/src/client.rs
 --- a/crates/codegen/xai-grok-telemetry/src/client.rs
 +++ b/crates/codegen/xai-grok-telemetry/src/client.rs
