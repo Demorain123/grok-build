@@ -57,9 +57,11 @@ try {
     try {
         $PatchInWorktree = Join-Path $Worktree 'grok-safe\patches\0001-disable-cloud-storage-uploads.patch'
         Write-Host 'Applying fail-closed egress/update hardening patch...'
-        & git -C $Worktree apply --check -- $PatchInWorktree
-        if ($LASTEXITCODE -ne 0) { throw 'hardening patch check failed in build worktree' }
-        & git -C $Worktree apply -- $PatchInWorktree
+        # The patch is deliberately hand-maintained as a small replay layer.
+        # --recount recalculates hunk lengths but still requires source context to match.
+        & git -C $Worktree apply --recount --check -- $PatchInWorktree
+        if ($LASTEXITCODE -ne 0) { throw 'hardening patch context check failed in build worktree' }
+        & git -C $Worktree apply --recount -- $PatchInWorktree
         if ($LASTEXITCODE -ne 0) { throw 'hardening patch apply failed in build worktree' }
         & git -C $Worktree diff --check
         if ($LASTEXITCODE -ne 0) { throw 'patched tree failed git diff --check' }
