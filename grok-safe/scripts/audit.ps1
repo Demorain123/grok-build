@@ -34,7 +34,6 @@ try {
             Sort-Object Name
     )
     if ($PatchFiles.Count -eq 0) { Fail "no hardening patches found under: $PatchDir" }
-    $PatchPaths = @($PatchFiles | ForEach-Object { $_.FullName })
     $patchText = (($PatchFiles | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n")
 
     & git rev-parse --is-inside-work-tree *> $null
@@ -123,30 +122,42 @@ try {
         Fail ('new direct code.grok.com reference outside remote/client.rs requires review: ' + ($paths -join '; '))
     }
 
-    Write-Host '[4/10] Verifying remote-session writeback is fail-closed...'
+    Write-Host '[4/10] Verifying remote session sync and registry replication are fail-closed...'
     $remoteClientPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\remote\client.rs'
     $remoteSyncPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\remote\sync.rs'
     $agentInitPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\agent\init.rs'
-    foreach ($path in @($remoteClientPath, $remoteSyncPath, $agentInitPath)) {
+    $sessionRegistryPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\agent\session_registry_client.rs'
+    foreach ($path in @($remoteClientPath, $remoteSyncPath, $agentInitPath, $sessionRegistryPath)) {
         if (-not (Test-Path $path)) { Fail "missing expected remote-sync source: $path" }
     }
     $remoteClientText = Get-Content -Raw -LiteralPath $remoteClientPath
     $remoteSyncText = Get-Content -Raw -LiteralPath $remoteSyncPath
     $agentInitText = Get-Content -Raw -LiteralPath $agentInitPath
+    $sessionRegistryText = Get-Content -Raw -LiteralPath $sessionRegistryPath
     Require-Contains $remoteClientText 'https://code.grok.com' 'upstream code backend constant moved/changed; review remote egress path'
     Require-Contains $remoteSyncText 'save_session_data' 'RemoteSync implementation changed; review session writeback path'
     Require-Contains $agentInitText 'StorageMode::resolve' 'storage-mode resolution changed; review Writeback gating'
-    foreach ($marker in @('GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC','grok-safe-remote-sync-blocked','forcing local session storage')) {
+    Require-Contains $sessionRegistryText 'async fn send_authed' 'SessionRegistryClient network sink moved/changed; review cross-host replication'
+    Require-Contains $sessionRegistryText '/sessions/register' 'SessionRegistry register endpoint moved/changed; review replication metadata'
+    Require-Contains $sessionRegistryText '/replicas/update' 'SessionRegistry update endpoint moved/changed; review summary/first_prompt replication'
+    Require-Contains $sessionRegistryText '/replicas/finalize' 'SessionRegistry finalize endpoint moved/changed; review replication metadata'
+    foreach ($marker in @(
+        'GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC',
+        'grok-safe-remote-sync-blocked',
+        'forcing local session storage',
+        'blocked session-registry remote replication request'
+    )) {
         Require-Contains $patchText $marker "remote-sync hardening marker missing: $marker"
     }
 
-    Write-Host '[5/10] Verifying telemetry, feedback and session-analytics egress is fail-closed...'
+    Write-Host '[5/10] Verifying telemetry, analytics, feedback and embedding egress is fail-closed...'
     $telemetryClientPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-telemetry\src\client.rs'
     $externalOtelPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-telemetry\src\external\mod.rs'
     $internalOtelPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-telemetry\src\otel_layer\mod.rs'
     $feedbackExtensionPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\extensions\feedback.rs'
     $feedbackClientPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-shell\src\agent\feedback_client.rs'
-    foreach ($path in @($telemetryClientPath, $externalOtelPath, $internalOtelPath, $feedbackExtensionPath, $feedbackClientPath)) {
+    $memoryEmbeddingPath = Join-Path $RepoRoot 'crates\codegen\xai-grok-memory\src\embedding.rs'
+    foreach ($path in @($telemetryClientPath, $externalOtelPath, $internalOtelPath, $feedbackExtensionPath, $feedbackClientPath, $memoryEmbeddingPath)) {
         if (-not (Test-Path $path)) { Fail "missing expected auxiliary-egress source: $path" }
     }
     $telemetryClientText = Get-Content -Raw -LiteralPath $telemetryClientPath
@@ -154,6 +165,7 @@ try {
     $internalOtelText = Get-Content -Raw -LiteralPath $internalOtelPath
     $feedbackExtensionText = Get-Content -Raw -LiteralPath $feedbackExtensionPath
     $feedbackClientText = Get-Content -Raw -LiteralPath $feedbackClientPath
+    $memoryEmbeddingText = Get-Content -Raw -LiteralPath $memoryEmbeddingPath
     Require-Contains $telemetryClientText 'pub fn init(' 'telemetry client init moved/changed; review product telemetry sink'
     Require-Contains $telemetryClientText 'pub fn init_if_needed(' 'telemetry re-init moved/changed; review product telemetry sink'
     Require-Contains $externalOtelText 'pub fn init(cfg: Option<ExternalOtelConfig>)' 'external OTLP init moved/changed; review external exporter sink'
@@ -162,10 +174,14 @@ try {
     Require-Contains $feedbackClientText 'async fn send_json<T: DeserializeOwned>' 'FeedbackClient JSON send sink moved/changed; review session analytics egress'
     Require-Contains $feedbackClientText 'async fn send_empty' 'FeedbackClient empty send sink moved/changed; review session analytics egress'
     Require-Contains $feedbackClientText 'send_turn_delta' 'per-turn analytics path moved/changed; review session analytics egress'
-    if ([regex]::Matches($patchText, [regex]::Escape('GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS')).Count -lt 5) {
-        Fail 'auxiliary-egress binary guard is not present across all expected telemetry/feedback layers'
-    }
-    foreach ($marker in @('feedback network submission is disabled','blocked feedback/session-signals auxiliary request','grok_safe_aux_egress_allowed')) {
+    Require-Contains $memoryEmbeddingText 'impl EmbeddingProvider for ApiEmbeddingProvider' 'remote memory embedding provider moved/changed; review text egress'
+    Require-Contains $memoryEmbeddingText 'async fn embed_batch' 'memory embedding network sink moved/changed; review text egress'
+    foreach ($marker in @(
+        'feedback network submission is disabled',
+        'blocked feedback/session-signals auxiliary request',
+        'blocked remote memory embedding text egress',
+        'grok_safe_aux_egress_allowed'
+    )) {
         Require-Contains $patchText $marker "auxiliary-egress hardening marker missing: $marker"
     }
 
@@ -226,7 +242,10 @@ try {
     foreach ($needle in @(
         '.\grok-safe\scripts\audit.ps1',
         '0002-block-feedback-session-signals.patch',
+        '0003-block-session-registry-replication.patch',
+        '0004-block-remote-memory-embeddings.patch',
         'cargo check -p xai-file-utils',
+        'cargo check -p xai-grok-memory',
         'cargo check -p xai-grok-telemetry',
         'cargo check -p xai-grok-shell',
         'cargo check -p xai-grok-update',
@@ -238,7 +257,8 @@ try {
     Write-Host '[10/10] Inventorying security-sensitive network/storage markers...'
     $riskPatterns = @(
         '/storage','storage.googleapis.com','https://code.grok.com','save_session_data',
-        'turn-deltas','/signals','repo_state.upload','upload_multipart','batch_upload','TraceExportConfig',
+        '/sessions/register','/replicas/update','/replicas/finalize',
+        'turn-deltas','/signals','/embeddings','repo_state.upload','upload_multipart','batch_upload','TraceExportConfig',
         'aws_sdk_s3','gcloud_storage','reqwest::multipart',
         'GROK_INTERNAL_OTLP_TRACES_ENDPOINT','GROK_TRACE_UPLOAD_BUCKET',
         'GROK_TELEMETRY_ENABLED','GROK_FEEDBACK_ENABLED','run_install_script'
@@ -257,8 +277,8 @@ try {
 
     Write-Host ''
     Write-Host 'grok-safe static audit PASSED.' -ForegroundColor Green
-    Write-Host 'Known non-inference storage/session-sync/telemetry/session-analytics/update sinks are fail-closed and upgrade drift is checked.'
-    Write-Host 'This does NOT prove that model inference contains no source code, nor does it sandbox explicitly trusted MCP/hooks/plugins/shell/web tools.' -ForegroundColor Yellow
+    Write-Host 'Known non-inference storage/session-sync/session-registry/telemetry/analytics/embedding/update sinks are fail-closed and upgrade drift is checked.'
+    Write-Host 'This does NOT prove that model inference contains no source code, nor does it sandbox explicitly trusted MCP/hooks/plugins/shell/web/remote-sandbox tools.' -ForegroundColor Yellow
 }
 finally {
     Pop-Location
