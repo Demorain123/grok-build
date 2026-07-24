@@ -9,10 +9,13 @@ $SafeRoot = Resolve-Path (Join-Path $ScriptDir '..')
 $RepoRoot = Resolve-Path (Join-Path $SafeRoot '..')
 $AuditScript = Join-Path $ScriptDir 'audit.ps1'
 $EgressAuditScript = Join-Path $ScriptDir 'audit-egress-boundaries.ps1'
+$ProtocBootstrapScript = Join-Path $ScriptDir 'ensure-windows-protoc.ps1'
 $PatchDir = Join-Path $SafeRoot 'patches'
 $DistDir = Join-Path $SafeRoot 'dist'
 $CacheDir = Join-Path $SafeRoot '.cache'
 $TargetDir = Join-Path $CacheDir 'target'
+$oldProtoc = $env:PROTOC
+$oldSafeProtocVersion = $env:GROK_SAFE_PROTOC_VERSION
 
 foreach ($cmd in @('git', 'cargo', 'rustc', 'dotslash')) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
@@ -20,9 +23,9 @@ foreach ($cmd in @('git', 'cargo', 'rustc', 'dotslash')) {
     }
 }
 
-foreach ($audit in @($AuditScript, $EgressAuditScript)) {
+foreach ($audit in @($AuditScript, $EgressAuditScript, $ProtocBootstrapScript)) {
     if (-not (Test-Path -LiteralPath $audit -PathType Leaf)) {
-        throw "Audit script not found: $audit"
+        throw "Required build/safety script not found: $audit"
     }
 }
 $PatchFiles = @(
@@ -50,14 +53,23 @@ try {
     & $AuditScript
     & $EgressAuditScript
 
+    New-Item -ItemType Directory -Force -Path $DistDir, $CacheDir, $TargetDir | Out-Null
+
+    $protocVersion = $null
+    if ($IsWindows) {
+        Write-Host 'Preparing upstream-matched verified Windows protoc...'
+        & $ProtocBootstrapScript -RepoRoot $RepoRoot -CacheRoot (Join-Path $CacheDir 'protoc')
+        if (-not $env:PROTOC) { throw 'Windows protoc bootstrap did not set PROTOC.' }
+        $protocVersion = (& $env:PROTOC --version 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) { throw 'Prepared Windows protoc failed its version check.' }
+    }
+
     $patchHashes = [ordered]@{}
     foreach ($patch in $PatchFiles) {
         $patchHashes[$patch.Name] = (Get-FileHash -Algorithm SHA256 -LiteralPath $patch.FullName).Hash.ToLowerInvariant()
     }
     $cargoVersion = (& cargo --version).Trim()
     $rustcVersion = (& rustc --version).Trim()
-
-    New-Item -ItemType Directory -Force -Path $DistDir, $CacheDir, $TargetDir | Out-Null
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $Worktree = Join-Path ([System.IO.Path]::GetTempPath()) "grok-safe-build-$stamp-$PID"
@@ -171,7 +183,7 @@ try {
         $patchHashes | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 -Path (Join-Path $DistDir 'PATCH_SHA256.json')
 
         $buildInfo = [ordered]@{
-            schema = 4
+            schema = 5
             product = 'grok-safe'
             policy = 'fail-closed-non-inference-egress-v5'
             source_repository = 'https://github.com/xai-org/grok-build'
@@ -182,6 +194,7 @@ try {
             binary_sha256 = $exeHash
             cargo_version = $cargoVersion
             rustc_version = $rustcVersion
+            protoc_version = $protocVersion
             built_at_utc = [DateTime]::UtcNow.ToString('o')
             blocked_by_default = @(
                 'cloud-storage-artifact-uploads',
@@ -204,6 +217,7 @@ try {
             Write-Host ("Patch SHA256:  {0}  {1}" -f $entry.Value, $entry.Key)
         }
         Write-Host "Source commit: $sourceCommit"
+        if ($protocVersion) { Write-Host "Protoc:        $protocVersion" }
     }
     finally {
         if (Test-Path $Worktree) {
@@ -216,5 +230,15 @@ try {
     }
 }
 finally {
+    if ($null -eq $oldProtoc) {
+        Remove-Item Env:PROTOC -ErrorAction SilentlyContinue
+    } else {
+        $env:PROTOC = $oldProtoc
+    }
+    if ($null -eq $oldSafeProtocVersion) {
+        Remove-Item Env:GROK_SAFE_PROTOC_VERSION -ErrorAction SilentlyContinue
+    } else {
+        $env:GROK_SAFE_PROTOC_VERSION = $oldSafeProtocVersion
+    }
     Pop-Location
 }
