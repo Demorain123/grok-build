@@ -149,6 +149,10 @@ jobs:
         shell: pwsh
         run: dotslash --version
 
+      - name: Compile unpatched upstream xai-grok-memory Windows baseline
+        shell: pwsh
+        run: cargo check -p xai-grok-memory --quiet
+
       - name: Apply ordered hardening patch set
         shell: pwsh
         run: |
