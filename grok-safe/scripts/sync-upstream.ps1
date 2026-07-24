@@ -11,6 +11,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SafeRoot = Resolve-Path (Join-Path $ScriptDir '..')
 $RepoRoot = Resolve-Path (Join-Path $SafeRoot '..')
 $AuditScript = Join-Path $ScriptDir 'audit.ps1'
+$EgressAuditScript = Join-Path $ScriptDir 'audit-egress-boundaries.ps1'
 
 function Invoke-Git([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args) {
     & git @Args
@@ -37,7 +38,13 @@ function Test-SecuritySensitivePath([string]$Path) {
         '^crates/codegen/xai-grok-memory/',
         '^crates/codegen/xai-grok-update/',
         '^crates/codegen/xai-grok-telemetry/',
+        '^crates/codegen/xai-grok-workspace/src/(upload/|recovery\.rs$)',
+        '^crates/codegen/xai-grok-http/',
+        '^crates/codegen/xai-grok-sampler/',
+        '^crates/codegen/xai-mixpanel/',
+        '^crates/common/xai-tracing/src/http_client\.rs$',
         '^prod/mc/cli-chat-proxy-types/',
+        '(^|/)Cargo\.toml$',
         '^Cargo\.lock$',
         '^rust-toolchain\.toml$'
     )
@@ -58,6 +65,15 @@ function Restore-PreSyncHead([string]$Commit, [string]$Reason) {
     Write-Host 'Rollback completed.' -ForegroundColor Green
 }
 
+function Invoke-SafetyAudits {
+    & $AuditScript
+    if (Test-Path -LiteralPath $EgressAuditScript -PathType Leaf) {
+        & $EgressAuditScript
+    } else {
+        throw "egress audit script not found: $EgressAuditScript"
+    }
+}
+
 Push-Location $RepoRoot
 try {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -65,6 +81,9 @@ try {
     }
     if (-not (Test-Path $AuditScript)) {
         throw "audit script not found: $AuditScript"
+    }
+    if (-not (Test-Path $EgressAuditScript)) {
+        throw "egress audit script not found: $EgressAuditScript"
     }
 
     $status = & git status --porcelain
@@ -103,10 +122,8 @@ try {
     Write-Host "Common base:          $mergeBase"
 
     if ($mergeBase -eq $upstream) {
-        Write-Host 'No new upstream commits to replay. Running the current audit only.'
-        # audit.ps1 fails by throwing; let that propagate. Do not inspect a stale
-        # $LASTEXITCODE left by a native command that audit may intentionally probe.
-        & $AuditScript
+        Write-Host 'No new upstream commits to replay. Running the current audits only.'
+        Invoke-SafetyAudits
         return
     }
 
@@ -146,13 +163,10 @@ try {
 
     $postRebase = (& git rev-parse HEAD).Trim()
     Write-Host "Rebased HEAD:          $postRebase"
-    Write-Host 'Running post-sync security audit...'
+    Write-Host 'Running post-sync security audits...'
 
     try {
-        # This is intentionally a PowerShell exception boundary. audit.ps1 uses
-        # `throw`, so checking $LASTEXITCODE after invocation is insufficient and
-        # could skip rollback entirely.
-        & $AuditScript
+        Invoke-SafetyAudits
     }
     catch {
         $auditMessage = $_.Exception.Message
