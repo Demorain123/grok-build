@@ -200,3 +200,10 @@ jobs:
       - name: Smoke-test produced binary without starting a session
         shell: pwsh
         run: .\target\release\xai-grok-pager.exe version
+
+      - name: Smoke-test MCP command surface with empty home
+        shell: pwsh
+        run: |
+          $env:GROK_HOME = Join-Path $env:RUNNER_TEMP 'grok-safe-mcp-smoke-home'
+          New-Item -ItemType Directory -Force -Path $env:GROK_HOME | Out-Null
+          .\target\release\xai-grok-pager.exe mcp list --json
