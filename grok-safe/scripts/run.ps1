@@ -136,6 +136,11 @@ if ($IsolatedHome) {
     $env:GROK_HOME = Join-Path $HOME '.grok'
 }
 
+# PowerShell leaves a ValueFromRemainingArguments array as $null when the caller
+# supplies no Grok arguments. Normalize it so strict mode and no-argument TUI
+# launches use the exact same safe path as CLI subcommands.
+$GrokArgs = @($GrokArgs)
+
 # Allow callers to use the common `--` separator without forwarding it to Grok.
 if ($GrokArgs.Count -gt 0 -and $GrokArgs[0] -eq '--') {
     $GrokArgs = @($GrokArgs | Select-Object -Skip 1)
