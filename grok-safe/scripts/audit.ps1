@@ -50,7 +50,8 @@ try {
 
     $patchText = Get-Content -Raw -LiteralPath $PatchPath
     foreach ($name in $expected) {
-        if ($patchText -notmatch [regex]::Escape("grok_safe_block_cloud_storage_upload(\"$name\")")) {
+        $guard = 'grok_safe_block_cloud_storage_upload("' + $name + '")'
+        if (-not $patchText.Contains($guard)) {
             Fail "patch does not contain a fail-closed guard for $name"
         }
     }
