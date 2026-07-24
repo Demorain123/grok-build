@@ -8,7 +8,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SafeRoot = Resolve-Path (Join-Path $ScriptDir '..')
 $RepoRoot = Resolve-Path (Join-Path $SafeRoot '..')
 $AuditScript = Join-Path $ScriptDir 'audit.ps1'
-$PatchPath = Join-Path $SafeRoot 'patches\0001-disable-cloud-storage-uploads.patch'
+$PatchDir = Join-Path $SafeRoot 'patches'
 $DistDir = Join-Path $SafeRoot 'dist'
 $CacheDir = Join-Path $SafeRoot '.cache'
 $TargetDir = Join-Path $CacheDir 'target'
@@ -19,8 +19,12 @@ foreach ($cmd in @('git', 'cargo', 'rustc', 'dotslash')) {
     }
 }
 
-if (-not (Test-Path $PatchPath)) { throw "Hardening patch not found: $PatchPath" }
 if (-not (Test-Path $AuditScript)) { throw "Audit script not found: $AuditScript" }
+$PatchFiles = @(
+    Get-ChildItem -LiteralPath $PatchDir -File -Filter '*.patch' -ErrorAction Stop |
+        Sort-Object Name
+)
+if ($PatchFiles.Count -eq 0) { throw "No hardening patches found under: $PatchDir" }
 
 Push-Location $RepoRoot
 try {
@@ -38,10 +42,14 @@ try {
     }
 
     Write-Host 'Running mandatory static security audit...'
+    # PowerShell-script failures propagate via throw; do not inspect a stale native
+    # $LASTEXITCODE after invoking the audit script.
     & $AuditScript
-    if ($LASTEXITCODE -ne 0) { throw 'grok-safe audit failed' }
 
-    $patchHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $PatchPath).Hash.ToLowerInvariant()
+    $patchHashes = [ordered]@{}
+    foreach ($patch in $PatchFiles) {
+        $patchHashes[$patch.Name] = (Get-FileHash -Algorithm SHA256 -LiteralPath $patch.FullName).Hash.ToLowerInvariant()
+    }
     $cargoVersion = (& cargo --version).Trim()
     $rustcVersion = (& rustc --version).Trim()
 
@@ -55,14 +63,22 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'git worktree add failed' }
 
     try {
-        $PatchInWorktree = Join-Path $Worktree 'grok-safe\patches\0001-disable-cloud-storage-uploads.patch'
-        Write-Host 'Applying fail-closed egress/update hardening patch...'
-        # The patch is deliberately hand-maintained as a small replay layer.
-        # --recount recalculates hunk lengths but still requires source context to match.
-        & git -C $Worktree apply --recount --check -- $PatchInWorktree
-        if ($LASTEXITCODE -ne 0) { throw 'hardening patch context check failed in build worktree' }
-        & git -C $Worktree apply --recount -- $PatchInWorktree
-        if ($LASTEXITCODE -ne 0) { throw 'hardening patch apply failed in build worktree' }
+        $PatchFilesInWorktree = @(
+            Get-ChildItem -LiteralPath (Join-Path $Worktree 'grok-safe\patches') -File -Filter '*.patch' |
+                Sort-Object Name
+        )
+        if ($PatchFilesInWorktree.Count -ne $PatchFiles.Count) {
+            throw 'hardening patch count changed between source and detached build worktree'
+        }
+
+        Write-Host ("Applying {0} ordered fail-closed hardening patch(es)..." -f $PatchFilesInWorktree.Count)
+        foreach ($patch in $PatchFilesInWorktree) {
+            Write-Host ("  -> {0}" -f $patch.Name)
+            & git -C $Worktree apply --recount --check -- $patch.FullName
+            if ($LASTEXITCODE -ne 0) { throw "hardening patch context check failed: $($patch.Name)" }
+            & git -C $Worktree apply --recount -- $patch.FullName
+            if ($LASTEXITCODE -ne 0) { throw "hardening patch apply failed: $($patch.Name)" }
+        }
         & git -C $Worktree diff --check
         if ($LASTEXITCODE -ne 0) { throw 'patched tree failed git diff --check' }
 
@@ -73,6 +89,7 @@ try {
             @{ Path='crates\codegen\xai-grok-shell\src\agent\init.rs'; Needle='forcing local session storage' },
             @{ Path='crates\codegen\xai-grok-shell\src\remote\client.rs'; Needle='grok-safe-remote-sync-blocked' },
             @{ Path='crates\codegen\xai-grok-shell\src\extensions\feedback.rs'; Needle='feedback network submission is disabled' },
+            @{ Path='crates\codegen\xai-grok-shell\src\agent\feedback_client.rs'; Needle='blocked feedback/session-signals auxiliary request' },
             @{ Path='crates\codegen\xai-grok-telemetry\src\client.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
             @{ Path='crates\codegen\xai-grok-telemetry\src\external\mod.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
             @{ Path='crates\codegen\xai-grok-telemetry\src\otel_layer\mod.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
@@ -94,7 +111,7 @@ try {
         try {
             Push-Location $Worktree
             try {
-                Write-Host 'Compiling every crate modified by the security patch...'
+                Write-Host 'Compiling every crate modified by the security patches...'
                 & cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update -p xai-grok-telemetry
                 if ($LASTEXITCODE -ne 0) { throw 'focused cargo check for hardened crates failed' }
 
@@ -133,18 +150,18 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'built grok-safe.exe failed the version smoke check' }
 
         Set-Content -NoNewline -Encoding ascii -Path (Join-Path $DistDir 'grok-safe.exe.sha256') -Value "$exeHash  grok-safe.exe"
-        Set-Content -NoNewline -Encoding ascii -Path (Join-Path $DistDir 'PATCH_SHA256.txt') -Value $patchHash
         Set-Content -NoNewline -Encoding ascii -Path (Join-Path $DistDir 'SOURCE_COMMIT.txt') -Value $sourceCommit
+        $patchHashes | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 -Path (Join-Path $DistDir 'PATCH_SHA256.json')
 
         $buildInfo = [ordered]@{
-            schema = 2
+            schema = 3
             product = 'grok-safe'
-            policy = 'fail-closed-non-inference-egress-v3'
+            policy = 'fail-closed-non-inference-egress-v4'
             source_repository = 'https://github.com/xai-org/grok-build'
             safety_repository = 'https://github.com/Demorain123/grok-build'
             safety_branch = $sourceBranch
             source_commit = $sourceCommit
-            hardening_patch_sha256 = $patchHash
+            hardening_patches_sha256 = $patchHashes
             binary_sha256 = $exeHash
             cargo_version = $cargoVersion
             rustc_version = $rustcVersion
@@ -154,17 +171,19 @@ try {
                 'remote-session-writeback-and-sharing-backend',
                 'product-telemetry-and-mixpanel',
                 'internal-and-external-otlp-export',
-                'feedback-network-submission',
+                'feedback-and-session-analytics-egress',
                 'in-app-self-update'
             )
         }
-        $buildInfo | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -Path (Join-Path $DistDir 'BUILD_INFO.json')
+        $buildInfo | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 -Path (Join-Path $DistDir 'BUILD_INFO.json')
 
         Write-Host ''
         Write-Host 'Hardened build completed.' -ForegroundColor Green
         Write-Host "Binary:        $destExe"
         Write-Host "Binary SHA256: $exeHash"
-        Write-Host "Patch SHA256:  $patchHash"
+        foreach ($entry in $patchHashes.GetEnumerator()) {
+            Write-Host ("Patch SHA256:  {0}  {1}" -f $entry.Value, $entry.Key)
+        }
         Write-Host "Source commit: $sourceCommit"
     }
     finally {
