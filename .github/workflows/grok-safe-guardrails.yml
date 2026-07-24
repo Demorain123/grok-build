@@ -197,6 +197,15 @@ jobs:
           Get-Content -LiteralPath $log -Tail 160
           exit $code
 
+      - name: Upload release linker diagnostic log
+        if: always()
+        uses: actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd5bba # v4.3.2
+        with:
+          name: windows-release-linker-log
+          path: ${{ runner.temp }}\release-build.log
+          if-no-files-found: warn
+          retention-days: 3
+
       - name: Smoke-test produced binary without starting a session
         shell: pwsh
         run: .\target\release\xai-grok-pager.exe version
