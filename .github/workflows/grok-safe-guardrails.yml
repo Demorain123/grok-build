@@ -156,23 +156,23 @@ jobs:
 
       - name: Compile xai-file-utils hardening
         shell: pwsh
-        run: cargo check -q -p xai-file-utils
+        run: cargo check -p xai-file-utils --quiet
 
       - name: Compile xai-grok-telemetry hardening
         shell: pwsh
-        run: cargo check -q -p xai-grok-telemetry
+        run: cargo check -p xai-grok-telemetry --quiet
 
       - name: Compile xai-grok-shell hardening
         shell: pwsh
-        run: cargo check -q -p xai-grok-shell
+        run: cargo check -p xai-grok-shell --quiet
 
       - name: Compile xai-grok-update hardening
         shell: pwsh
-        run: cargo check -q -p xai-grok-update
+        run: cargo check -p xai-grok-update --quiet
 
       - name: Link Windows hardened release
         shell: pwsh
-        run: cargo build -q -p xai-grok-pager-bin --release
+        run: cargo build -p xai-grok-pager-bin --release --quiet
 
       - name: Smoke-test produced binary without starting a session
         shell: pwsh
