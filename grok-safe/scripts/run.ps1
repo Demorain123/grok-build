@@ -59,10 +59,10 @@ $env:GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC = '0'
 $env:GROK_SAFE_UNSAFE_ALLOW_SELF_UPDATE = '0'
 $env:GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS = '0'
 
-# Keep session persistence local even if xAI remote settings or an existing
-# user config would otherwise select Writeback.
+# Keep automatic session persistence local even if xAI remote settings or an
+# existing user config would otherwise select Writeback. Explicit user-initiated
+# remote read/restore/share operations keep their upstream backend behavior.
 $env:GROK_STORAGE_MODE = 'local'
-$env:GROK_CODE_BACKEND_URL = 'http://127.0.0.1:9/grok-safe-remote-sync-blocked'
 
 # Disable Grok-owned product telemetry, trace uploads, feedback analytics, and
 # Grok's external OTLP configuration. The Rust patch independently disables both
@@ -160,7 +160,7 @@ Write-Host ''
 Write-Host 'grok-safe privacy guard: ON' -ForegroundColor Green
 Write-Host "Binary integrity: VERIFIED ($actualHash)" -ForegroundColor Green
 Write-Host 'Cloud/session artifact uploads: BLOCKED'
-Write-Host 'Remote session writeback/share backend: BLOCKED'
+Write-Host 'Automatic remote session writeback: BLOCKED; explicit remote read/share retained'
 Write-Host 'In-app self-update: BLOCKED (sync + rebuild instead)'
 Write-Host 'Product telemetry / Grok OTLP / feedback analytics: BLOCKED'
 Write-Host 'Native MCP/hooks/plugins: UPSTREAM BEHAVIOR RETAINED'
@@ -168,7 +168,7 @@ Write-Host ("Vendor compatibility discovery: {0}" -f $(if ($StrictExtensionIsola
 Write-Host "GROK_HOME: $effectiveHome"
 Write-Host ''
 Write-Host 'Boundary: source text intentionally included in model inference can still leave the machine.' -ForegroundColor Yellow
-Write-Host 'Boundary: explicitly configured MCP/hooks/plugins/shell/web tools may have their own network access by design.' -ForegroundColor Yellow
+Write-Host 'Boundary: explicitly configured MCP/hooks/plugins/shell/web/share tools may have their own network access by design.' -ForegroundColor Yellow
 Write-Host ''
 
 & $Binary @GrokArgs
