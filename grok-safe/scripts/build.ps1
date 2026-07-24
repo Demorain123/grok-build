@@ -61,6 +61,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'hardening patch check failed in build worktree' }
         & git -C $Worktree apply -- $PatchInWorktree
         if ($LASTEXITCODE -ne 0) { throw 'hardening patch apply failed in build worktree' }
+        & git -C $Worktree diff --check
+        if ($LASTEXITCODE -ne 0) { throw 'patched tree failed git diff --check' }
 
         # Verify the patched tree itself, not merely the patch text.
         $patchedAssertions = @(
@@ -68,6 +70,10 @@ try {
             @{ Path='crates\codegen\xai-file-utils\src\storage_client.rs'; Needle='grok-safe-storage-blocked' },
             @{ Path='crates\codegen\xai-grok-shell\src\agent\init.rs'; Needle='forcing local session storage' },
             @{ Path='crates\codegen\xai-grok-shell\src\remote\client.rs'; Needle='grok-safe-remote-sync-blocked' },
+            @{ Path='crates\codegen\xai-grok-shell\src\extensions\feedback.rs'; Needle='feedback network submission is disabled' },
+            @{ Path='crates\codegen\xai-grok-telemetry\src\client.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
+            @{ Path='crates\codegen\xai-grok-telemetry\src\external\mod.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
+            @{ Path='crates\codegen\xai-grok-telemetry\src\otel_layer\mod.rs'; Needle='GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS' },
             @{ Path='crates\codegen\xai-grok-update\src\auto_update.rs'; Needle='in-app self-update is disabled' }
         )
         foreach ($assertion in $patchedAssertions) {
@@ -87,7 +93,7 @@ try {
             Push-Location $Worktree
             try {
                 Write-Host 'Compiling every crate modified by the security patch...'
-                & cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update
+                & cargo check -p xai-file-utils -p xai-grok-shell -p xai-grok-update -p xai-grok-telemetry
                 if ($LASTEXITCODE -ne 0) { throw 'focused cargo check for hardened crates failed' }
 
                 Write-Host 'Building hardened Grok Build release...'
@@ -129,9 +135,9 @@ try {
         Set-Content -NoNewline -Encoding ascii -Path (Join-Path $DistDir 'SOURCE_COMMIT.txt') -Value $sourceCommit
 
         $buildInfo = [ordered]@{
-            schema = 1
+            schema = 2
             product = 'grok-safe'
-            policy = 'fail-closed-non-inference-egress-v2'
+            policy = 'fail-closed-non-inference-egress-v3'
             source_repository = 'https://github.com/xai-org/grok-build'
             safety_repository = 'https://github.com/Demorain123/grok-build'
             safety_branch = $sourceBranch
@@ -141,12 +147,20 @@ try {
             cargo_version = $cargoVersion
             rustc_version = $rustcVersion
             built_at_utc = [DateTime]::UtcNow.ToString('o')
+            blocked_by_default = @(
+                'cloud-storage-artifact-uploads',
+                'remote-session-writeback-and-sharing-backend',
+                'product-telemetry-and-mixpanel',
+                'internal-and-external-otlp-export',
+                'feedback-network-submission',
+                'in-app-self-update'
+            )
         }
-        $buildInfo | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 -Path (Join-Path $DistDir 'BUILD_INFO.json')
+        $buildInfo | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -Path (Join-Path $DistDir 'BUILD_INFO.json')
 
         Write-Host ''
         Write-Host 'Hardened build completed.' -ForegroundColor Green
-        Write-Host "Binary:       $destExe"
+        Write-Host "Binary:        $destExe"
         Write-Host "Binary SHA256: $exeHash"
         Write-Host "Patch SHA256:  $patchHash"
         Write-Host "Source commit: $sourceCommit"
