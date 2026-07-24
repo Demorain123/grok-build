@@ -139,6 +139,39 @@ diff --git a/crates/codegen/xai-grok-shell/src/agent/init.rs b/crates/codegen/xa
      // Writeback talks to the code backend; requires grok.com auth.
      if cfg.storage_mode == StorageMode::Writeback
          && !auth_manager.current().is_some_and(|a| a.is_xai_auth())
+diff --git a/crates/codegen/xai-grok-shell/src/extensions/feedback.rs b/crates/codegen/xai-grok-shell/src/extensions/feedback.rs
+--- a/crates/codegen/xai-grok-shell/src/extensions/feedback.rs
++++ b/crates/codegen/xai-grok-shell/src/extensions/feedback.rs
+@@ -26,6 +26,18 @@ use xai_file_utils::gcs::upload_bytes;
+ use xai_grok_telemetry::id::agent_id;
+ 
++const GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS";
++
++fn grok_safe_aux_egress_allowed() -> bool {
++    cfg!(test)
++        || matches!(
++            std::env::var(GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS).as_deref(),
++            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++        )
++}
++
+ #[tracing::instrument(skip_all, fields(method = %args.method))]
+ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+     match args.method.as_ref() {
+@@ -82,6 +94,12 @@ async fn handle_btw(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+ }
+ 
+ async fn handle_feedback(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
++    if !grok_safe_aux_egress_allowed() {
++        return Err(acp::Error::internal_error().data(
++            "grok-safe: feedback network submission is disabled in hardened mode",
++        ));
++    }
++
+     if !agent.cfg.borrow().is_feedback_enabled() {
+         return Err(acp::Error::internal_error().data(
+             "Feedback is disabled. To enable, set GROK_FEEDBACK_ENABLED=true or \
 diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen/xai-grok-shell/src/remote/client.rs
 --- a/crates/codegen/xai-grok-shell/src/remote/client.rs
 +++ b/crates/codegen/xai-grok-shell/src/remote/client.rs
@@ -193,6 +226,113 @@ diff --git a/crates/codegen/xai-grok-shell/src/remote/client.rs b/crates/codegen
              auth_manager: None,
          }
      }
+diff --git a/crates/codegen/xai-grok-telemetry/src/client.rs b/crates/codegen/xai-grok-telemetry/src/client.rs
+--- a/crates/codegen/xai-grok-telemetry/src/client.rs
++++ b/crates/codegen/xai-grok-telemetry/src/client.rs
+@@ -130,6 +130,18 @@ fn normalize_tier(tier: &str) -> String {
+ }
+ 
+ static TELEMETRY_CLIENT: OnceLock<Mutex<Option<TelemetryClient>>> = OnceLock::new();
++
++const GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS";
++
++fn grok_safe_aux_egress_allowed() -> bool {
++    cfg!(test)
++        || matches!(
++            std::env::var(GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS).as_deref(),
++            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++        )
++}
+ 
+ /// Returns `true` when telemetry mode is `Enabled`.
+ /// Used by `log_event` — product analytics events only fire in `Enabled` mode.
+@@ -331,6 +343,11 @@ pub fn init(
+ ) {
+     let lock = TELEMETRY_CLIENT.get_or_init(|| Mutex::new(None));
+     let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
++    if !grok_safe_aux_egress_allowed() {
++        *guard = None;
++        return;
++    }
++
+     *guard = if mode.is_disabled() {
+         None
+     } else {
+@@ -366,6 +383,12 @@ pub fn init_if_needed(
+     subscription_tier: Option<String>,
+     http_client: reqwest::Client,
+ ) {
++    if !grok_safe_aux_egress_allowed() {
++        let lock = TELEMETRY_CLIENT.get_or_init(|| Mutex::new(None));
++        *lock.lock().unwrap_or_else(|err| err.into_inner()) = None;
++        return;
++    }
+     if mode.is_disabled() {
+         return;
+     }
+diff --git a/crates/codegen/xai-grok-telemetry/src/external/mod.rs b/crates/codegen/xai-grok-telemetry/src/external/mod.rs
+--- a/crates/codegen/xai-grok-telemetry/src/external/mod.rs
++++ b/crates/codegen/xai-grok-telemetry/src/external/mod.rs
+@@ -46,6 +46,18 @@ pub use config::{ContentGates, ExternalOtelConfig, ExternalOtelFileConfig};
+ 
+ static EXTERNAL: OnceLock<Option<Arc<ExternalTelemetry>>> = OnceLock::new();
++
++const GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS";
++
++fn grok_safe_aux_egress_allowed() -> bool {
++    cfg!(test)
++        || matches!(
++            std::env::var(GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS).as_deref(),
++            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++        )
++}
+ 
+ /// Identity *attributes* (plain id strings — never tokens). Derived from a
+ /// `CredentialSnapshot` at the telemetry-client init sites; updated post-auth
+@@ -135,6 +147,11 @@ pub struct ExternalTelemetry {
+ /// config resolution, **before auth** (no credentials needed). `None` records
+ /// the dormant state — the default path allocates nothing.
+ pub fn init(cfg: Option<ExternalOtelConfig>) {
++    if !grok_safe_aux_egress_allowed() {
++        let _ = EXTERNAL.set(None);
++        return;
++    }
+     let value = cfg.and_then(build_handle);
+     if EXTERNAL.set(value).is_err() {
+         tracing::debug!("external otel: init called more than once; keeping first registration");
+diff --git a/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs b/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs
+--- a/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs
++++ b/crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs
+@@ -19,6 +19,18 @@ mod redact;
+ static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
+ const ENV_OTEL_FILTER: &str = "GROK_OTEL_FILTER";
+ const DEFAULT_OTEL_FILTER: &str = "info";
++
++const GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS";
++
++fn grok_safe_aux_egress_allowed() -> bool {
++    cfg!(test)
++        || matches!(
++            std::env::var(GROK_SAFE_UNSAFE_ALLOW_AUX_EGRESS).as_deref(),
++            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++        )
++}
+ /// Configuration for [`build_otel_layer`]. Encapsulates all the runtime values
+ /// the layer needs that used to be reach-ins into shell-internal types
+ /// (`AuthManager`, `EndpointsConfig`, `GrokComConfig`).
+@@ -108,6 +120,9 @@ where
+         .with_filter(otel_filter)
+ }
+ fn build_tracer_provider(client: OtelClientInfo, config: OtelLayerConfig) -> SdkTracerProvider {
++    if !grok_safe_aux_egress_allowed() {
++        return SdkTracerProvider::builder().build();
++    }
+     match instrumentation::current_mode() {
+         instrumentation::InstrumentationMode::Server => build_server_provider(client, config),
+         _ => SdkTracerProvider::builder().build(),
 diff --git a/crates/codegen/xai-grok-update/src/auto_update.rs b/crates/codegen/xai-grok-update/src/auto_update.rs
 --- a/crates/codegen/xai-grok-update/src/auto_update.rs
 +++ b/crates/codegen/xai-grok-update/src/auto_update.rs
@@ -235,4 +375,3 @@ diff --git a/crates/codegen/xai-grok-update/src/auto_update.rs b/crates/codegen/
 +
      let result = match installer {
          "npm" => install_npm(
-             target,
