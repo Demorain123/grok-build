@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ProjectPath = (Get-Location).Path,
+    [switch]$StrictExtensionIsolation,
     [switch]$AllowProjectExtensions
 )
 
@@ -38,7 +39,10 @@ function Test-NonEmptyDirectory([string]$RelativePath, [string]$Label, [bool]$Hi
     }
 }
 
-# Native Grok project extensions.
+# Native Grok project extensions. MCP is an explicit user/project feature, so it is
+# warning-only by default; hooks/plugins remain higher-risk because they can execute
+# code automatically. StrictExtensionIsolation is optional and never required for
+# the core hidden-upload hardening provided by the Rust patches.
 Test-NonEmptyDirectory '.grok\hooks' 'Project Grok hooks can execute scripts on lifecycle/tool events' $true
 Test-NonEmptyDirectory '.grok\plugins' 'Project Grok plugins can add hooks, MCP servers, tools and skills' $true
 Test-NonEmptyDirectory '.grok\skills' 'Project Grok skills/instructions are loaded into the agent context' $false
@@ -50,23 +54,30 @@ if (Test-Path -LiteralPath $grokConfig -PathType Leaf) {
         $text -match '(?im)^\s*mcp_servers\s*='
     $declaresPlugins = $text -match '(?im)^\s*\[plugins(?:\.|\])' -or
         $text -match '(?im)^\s*plugins\s*='
-    if ($declaresMcp -or $declaresPlugins) {
-        Add-Finding $high 'Project .grok/config.toml declares MCP servers or plugins'
-    } elseif ($text -match '(?im)^\s*\[') {
+    if ($declaresPlugins) {
+        Add-Finding $high 'Project .grok/config.toml declares plugins'
+    }
+    if ($declaresMcp) {
+        Add-Finding $medium 'Project .grok/config.toml declares MCP servers (left enabled; review remote MCPs you do not trust)'
+    }
+    if (-not $declaresMcp -and -not $declaresPlugins -and $text -match '(?im)^\s*\[') {
         Add-Finding $medium 'Project .grok/config.toml exists (permissions/config should still be reviewed)'
     }
 }
 
-# Compatibility MCP sources that Grok documents as auto-discovered.
+# Compatibility MCP sources are explicit MCP configuration and are therefore
+# warning-only. The launcher preserves upstream compatibility unless strict
+# extension isolation is explicitly requested.
 foreach ($relative in @('.mcp.json', '.cursor\mcp.json')) {
     $path = Join-Path $root $relative
     if (Test-Path -LiteralPath $path -PathType Leaf) {
-        Add-Finding $high "Auto-discovered MCP configuration exists ($relative)"
+        Add-Finding $medium "MCP compatibility configuration exists ($relative); left available by default"
     }
 }
 
-# Claude Code compatibility: Grok can automatically read Claude hooks/plugins/
-# skills/agents alongside its native .grok sources.
+# Claude Code compatibility. Hooks/plugins can execute code, so surface them as
+# high-risk notices; skills/agents remain informational. They are only blocked
+# when StrictExtensionIsolation is explicitly enabled.
 foreach ($relative in @('.claude\settings.json', '.claude\settings.local.json')) {
     $path = Join-Path $root $relative
     if (Test-Path -LiteralPath $path -PathType Leaf) {
@@ -90,15 +101,18 @@ if ($medium.Count -gt 0) {
 }
 
 if ($high.Count -gt 0) {
-    Write-Host 'Potential independent egress/command surfaces detected:' -ForegroundColor Yellow
+    Write-Host 'Project extension execution surfaces detected:' -ForegroundColor Yellow
     $high | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
     Write-Host ''
-    Write-Host 'These are not the hidden Grok storage/writeback channels blocked by the Rust patch.' -ForegroundColor Yellow
-    Write-Host 'They are repo-controlled extensions that can legitimately start processes or contact remote services.' -ForegroundColor Yellow
-    if (-not $AllowProjectExtensions) {
-        throw 'grok-safe preflight blocked startup. Review the project extensions, then rerun run.ps1 with -AllowProjectExtensions only if you trust them.'
+    Write-Host 'These are explicit repo/vendor extensions, not the hidden Grok storage/writeback channels blocked by the Rust patch.' -ForegroundColor Yellow
+    if ($StrictExtensionIsolation -and -not $AllowProjectExtensions) {
+        throw 'Strict extension isolation blocked startup. Review the hooks/plugins, then rerun with -AllowProjectExtensions only if you trust them.'
     }
-    Write-Host 'Project extension override accepted for this launch.' -ForegroundColor Yellow
+    if ($StrictExtensionIsolation) {
+        Write-Host 'Strict extension isolation override accepted for this launch.' -ForegroundColor Yellow
+    } else {
+        Write-Host 'Normal extension behavior is retained. Use -StrictExtensionIsolation if you want these execution surfaces blocked.' -ForegroundColor Yellow
+    }
 }
 
 Write-Host 'Project extension preflight: PASSED' -ForegroundColor Green
