@@ -68,47 +68,36 @@ jobs:
       - name: Recount patch check - shared GCS dispatcher
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-file-utils/src/gcs.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Recount patch check - StorageClient
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-file-utils/src/storage_client.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Recount patch check - agent storage-mode bootstrap
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-shell/src/agent/init.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Recount patch check - feedback extension
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-shell/src/extensions/feedback.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Recount patch check - feedback session analytics client
         shell: pwsh
         run: git apply --recount --check -- grok-safe/patches/0002-block-feedback-session-signals.patch
-
       - name: Recount patch check - session registry replication
         shell: pwsh
         run: git apply --recount --check -- grok-safe/patches/0003-block-session-registry-replication.patch
-
       - name: Recount patch check - remote memory embeddings
         shell: pwsh
         run: git apply --recount --check -- grok-safe/patches/0004-block-remote-memory-embeddings.patch
-
       - name: Recount patch check - remote session client
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-shell/src/remote/client.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Recount patch check - product telemetry client
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-telemetry/src/client.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Recount patch check - external OTLP
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-telemetry/src/external/mod.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Recount patch check - internal OTLP
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-telemetry/src/otel_layer/mod.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
-
       - name: Recount patch check - self updater
         shell: pwsh
         run: git apply --recount --check --include=crates/codegen/xai-grok-update/src/auto_update.rs -- grok-safe/patches/0001-disable-cloud-storage-uploads.patch
@@ -184,32 +173,29 @@ jobs:
         shell: pwsh
         run: cargo check -p xai-grok-memory --quiet
 
-      - name: Compile xai-grok-telemetry hardening (diagnostic; production path is checked by shell/release)
+      - name: Compile xai-grok-telemetry hardening (diagnostic)
         continue-on-error: true
         shell: pwsh
-        run: |
-          $log = Join-Path $env:RUNNER_TEMP 'telemetry-check.log'
-          cargo check -p xai-grok-telemetry --message-format short *> $log
-          $code = $LASTEXITCODE
-          Get-Content -LiteralPath $log -Tail 80
-          exit $code
+        run: cargo check -p xai-grok-telemetry --quiet
 
-      - name: Compile xai-grok-shell hardening
+      - name: Compile xai-grok-shell hardening (diagnostic; final release is the production hard gate)
+        continue-on-error: true
         shell: pwsh
-        run: |
-          $log = Join-Path $env:RUNNER_TEMP 'shell-check.log'
-          cargo check -p xai-grok-shell --message-format short *> $log
-          $code = $LASTEXITCODE
-          Get-Content -LiteralPath $log -Tail 120
-          exit $code
+        run: cargo check -p xai-grok-shell --quiet
 
-      - name: Compile xai-grok-update hardening
+      - name: Compile xai-grok-update hardening (diagnostic; final release is the production hard gate)
+        continue-on-error: true
         shell: pwsh
         run: cargo check -p xai-grok-update --quiet
 
       - name: Link Windows hardened release
         shell: pwsh
-        run: cargo build -p xai-grok-pager-bin --release --quiet
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'release-build.log'
+          cargo build -p xai-grok-pager-bin --release --message-format short *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log -Tail 160
+          exit $code
 
       - name: Smoke-test produced binary without starting a session
         shell: pwsh
