@@ -1,0 +1,52 @@
+diff --git a/crates/codegen/xai-grok-shell/src/agent/session_registry_client.rs b/crates/codegen/xai-grok-shell/src/agent/session_registry_client.rs
+--- a/crates/codegen/xai-grok-shell/src/agent/session_registry_client.rs
++++ b/crates/codegen/xai-grok-shell/src/agent/session_registry_client.rs
+@@ -10,6 +10,25 @@ use anyhow::{Context, Result};
+ use reqwest::RequestBuilder;
+ use serde::{Deserialize, Serialize};
+ 
++const GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC: &str =
++    "GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC";
++
++fn grok_safe_remote_sync_allowed() -> bool {
++    cfg!(test)
++        || matches!(
++            std::env::var(GROK_SAFE_UNSAFE_ALLOW_REMOTE_SYNC).as_deref(),
++            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
++        )
++}
++
++fn grok_safe_block_session_registry_write(op: &str) -> Result<()> {
++    if grok_safe_remote_sync_allowed() {
++        return Ok(());
++    }
++    anyhow::bail!("grok-safe: blocked session-registry remote replication request ({op})")
++}
++
+ // ============================================================================
+ // Request / response types (local — not in cli-chat-proxy since these
+ // are only used by the agent, not consumed by other crates)
+@@ -251,6 +270,7 @@ impl SessionRegistryClient {
+ 
+     /// POST /v1/sessions/register (idempotent via ON CONFLICT)
+     pub async fn register(&self, req: &RegisterRequest) -> Result<()> {
++        grok_safe_block_session_registry_write("session register")?;
+         let url = format!("{}/sessions/register", self.base_url);
+         let response = self
+             .send_authed(self.post(&url).json(req), "session register")
+@@ -263,6 +283,7 @@ impl SessionRegistryClient {
+ 
+     /// POST /v1/sessions/{id}/replicas/update
+     pub async fn update(&self, session_id: &str, req: &UpdateRequest) -> Result<()> {
++        grok_safe_block_session_registry_write("session update")?;
+         let url = format!("{}/sessions/{}/replicas/update", self.base_url, session_id);
+         let response = self
+             .send_authed(self.post(&url).json(req), "session update")
+@@ -275,6 +296,7 @@ impl SessionRegistryClient {
+ 
+     /// POST /v1/sessions/{id}/replicas/finalize
+     pub async fn finalize(&self, session_id: &str) -> Result<()> {
++        grok_safe_block_session_registry_write("session finalize")?;
+         let url = format!(
+             "{}/sessions/{}/replicas/finalize",
+             self.base_url, session_id
